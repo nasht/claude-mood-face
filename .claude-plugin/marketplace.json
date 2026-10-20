@@ -1,0 +1,13 @@
+{
+  "name": "claude-mood-face",
+  "description": "A pixel face for Claude Code that reacts to the conversation.",
+  "owner": {
+    "name": "Nash Trajkovski"
+  },
+  "plugins": [
+    {
+      "name": "mood-face",
+      "source": "./"
+    }
+  ]
+}

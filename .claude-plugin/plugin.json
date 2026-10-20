@@ -1,0 +1,9 @@
+{
+  "name": "mood-face",
+  "version": "0.1.0",
+  "description": "A small face above the prompt that reacts to the conversation: eye rolls, sweat, table flips and naps.",
+  "author": {
+    "name": "Nash Trajkovski"
+  },
+  "types": "./types/index.d.ts"
+}
