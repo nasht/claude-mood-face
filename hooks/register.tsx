@@ -257,6 +257,7 @@ const GREETING_PREFIX_CHARS = 30
 const CAPTION_NOTE_MS = 8_000
 const MUSE_NOTE_MS = 20_000
 const CAPTION_GAP_MS = 3_000 // at most one model call this often
+const ACTIVITY_GAP_MS = 30_000 // tool calls get a caption only this long after the last one
 const MUSE_AFTER_MS = 45_000 // a turn this long, quiet this long, gets an idea or fable
 const MUSES_PER_TURN = 10
 const REMEMBERED_CAPTIONS = 8
@@ -502,8 +503,12 @@ function noteToolCall(mind: Mind, tool: string, input: Record<string, unknown>, 
   mind.activity.push(doing)
   mind.activity.splice(0, mind.activity.length - REMEMBERED_ACTIVITY)
   // Without the model, the plain description is the caption.
-  if (mind.hasQuips) want(mind, 'activity')
-  else mind.task = { note: doing, until: now + CAPTION_NOTE_MS }
+  if (!mind.hasQuips) mind.task = { note: doing, until: now + CAPTION_NOTE_MS }
+  else {
+    // Only the occasional step gets a quip; narrating every one is too much.
+    const lastAt = Math.max(mind.writer.lastShownAt, mind.writer.lastAskedAt)
+    if (lastAt === 0 || now - lastAt >= ACTIVITY_GAP_MS) want(mind, 'activity')
+  }
 }
 
 function showCaption(mind: Mind, kind: CaptionKind, note: string, now: number) {

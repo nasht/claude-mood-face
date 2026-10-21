@@ -223,12 +223,24 @@ test('the model is told what it already said', async ($, on) => {
   const clock = await start($, on, { isToolOk: true, asked, caption: 'grep, my old friend' })
   await $.turn.start({ text: 'fix it', turnId: 't1' })
   await $.tool.call({ tool: 'Read', file_path: '/src/app.ts' })
-  await clock.advance(3_500)
+  await clock.advance(31_000)
   await $.tool.call({ tool: 'Read', file_path: '/src/other.ts' })
   await clock.advance(500)
 
   expect(asked).toHaveLength(2)
   expect(asked[1]?.prompt).toContain('Already said, so do not repeat or echo: grep, my old friend')
+})
+
+test('tool calls in quick succession get one caption, not one each', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked })
+  await $.turn.start({ text: 'fix it', turnId: 't1' })
+  for (const file of ['a', 'b', 'c', 'd']) {
+    await $.tool.call({ tool: 'Read', file_path: `/src/${file}.ts` })
+    await clock.advance(4_000)
+  }
+
+  expect(asked).toHaveLength(1)
 })
 
 test('with quips off, the caption says what Claude is doing and nothing is asked', async ($, on) => {
