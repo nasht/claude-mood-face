@@ -38,6 +38,7 @@ export type Personality =
   | 'bukowski'
   | 'hippie'
   | 'geezer'
+  | 'holmes'
 
 export type Shown = {
   frame: Frame

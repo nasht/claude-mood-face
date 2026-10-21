@@ -45,6 +45,8 @@ const PALETTE: Record<string, number> = {
   F: 0xf2a0c8, // flower petal
   C: 0x6b5a45, // flat cap
   c: 0x8a7658, // flat cap tweed
+  M: 0x9a7b4f, // deerstalker
+  m: 0x6e5636, // deerstalker check, pipe
 }
 const TERMINAL_DEFAULT = 0x01000000
 
@@ -168,6 +170,13 @@ const ACCESSORIES: Partial<Record<Personality, Patch[]>> = {
   geezer: [
     { at: { x: 1, y: 0 }, rows: ['CcCcCcCcCcCc'] },
     { at: { x: 0, y: 1 }, rows: ['CCCCCCCCCCCCCCCC'] },
+  ],
+  // A deerstalker with its ear flaps down, and a pipe.
+  holmes: [
+    { at: { x: 1, y: 0 }, rows: ['MmMmMmMmMmMm'] },
+    { at: { x: 0, y: 1 }, rows: ['mMmMmMmMmMmMmM', 'M............M'] },
+    { at: { x: 9, y: 6 }, rows: ['DDD'] },
+    { at: { x: 12, y: 5 }, rows: ['mm', 'mm'] },
   ],
 }
 

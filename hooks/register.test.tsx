@@ -43,6 +43,7 @@ async function start($: EngineInterface, on: On, setup: Setup = {}) {
   on('prompt.submit', (_, e) => ({ text: e.text }))
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
+  on('prompt.edit', (_, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
   on('tool.call', () => (setup.isToolOk ? { result: {}, text: 'ok' } : { result: {}, text: 'boom', isError: true }))
   on('model.complete', (_, e) => {
     setup.asked?.push({ prompt: e.prompt, system: e.system })
@@ -63,8 +64,8 @@ async function faceText($: EngineInterface) {
   return texts.map(t => t?.text ?? '').join('')
 }
 
-test('a repeated prompt gets an eye roll', async ($, on) => {
-  const clock = await start($, on)
+test('with quips off, a repeated prompt gets an eye roll and a plain note', async ($, on) => {
+  const clock = await start($, on, { store: { lastSeenAt: 0, placement: 'band', quips: false } })
   await $.prompt.submit({ text: 'how do I run the backend tests' })
   await $.prompt.submit({ text: 'How do I run the backend tests?' })
   await clock.advance(700)
@@ -80,7 +81,7 @@ test('a long turn sweats, then three failures flip the table', async ($, on) => 
 
   for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'false' })
   await clock.advance(700)
-  expect(await faceText($)).toContain('┻━┻')
+  expect(await faceText($)).toMatch(/┻━┻|┬─┬/)
 })
 
 test('an eye roll plays once and holds its last frame', async ($, on) => {
@@ -150,7 +151,7 @@ test('kindness shows up in the temperament', async ($, on) => {
 })
 
 test('a first meeting gets a hello', async ($, on) => {
-  const clock = await start($, on, { store: { placement: 'band' } })
+  const clock = await start($, on, { store: { placement: 'band', quips: false } })
   await clock.advance(200)
   expect(await faceText($)).toContain("I'm Claude")
 })
@@ -158,7 +159,7 @@ test('a first meeting gets a hello', async ($, on) => {
 test('a long absence gets a welcome back', async ($, on) => {
   const clock = mock.clock(on)
   await clock.set(5 * DAY_MS)
-  mock.store(on, { lastSeenAt: 0, placement: 'band' })
+  mock.store(on, { lastSeenAt: 0, placement: 'band', quips: false })
   on('ui.panes', () => ({ value: [] }))
   on('command.register', () => ({ value: { command: 'face' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
@@ -278,20 +279,33 @@ test('a task prompt gets a quip, and /face quips turns them off', async ($, on) 
   expect(asked.at(-1)?.prompt).toContain('refactor the settlement engine')
 
   await $.command.run({ command: 'face', args: 'quips' })
-  await $.turn.complete({ turnId: 't1', reason: 'answer' })
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 500, isAborted: false })
   await $.prompt.submit({ text: 'now rename every variable in it' })
   await $.turn.start({ text: 'now rename every variable in it', turnId: 't2' })
   await clock.advance(500)
   expect(asked).toHaveLength(1)
 })
 
-test('small talk gets a reaction and no model call', async ($, on) => {
+test('small talk gets a reaction written in character, and no task quip', async ($, on) => {
   const asked: Asked[] = []
-  const clock = await start($, on, { asked })
+  const clock = await start($, on, { asked, caption: 'aw, you shameless flatterer' })
   await $.prompt.submit({ text: 'thanks so much for that' })
   await clock.advance(500)
 
-  expect(asked).toHaveLength(0)
+  expect(asked).toHaveLength(1)
+  expect(asked[0]?.prompt).toContain('What just happened: they thanked Claude: "thanks so much for that"')
+  expect(asked[0]?.prompt).toContain('Mood: blush')
+  expect(await faceText($)).toContain('aw, you shameless flatterer')
+  expect(await faceText($)).toContain('^')
+})
+
+test('a long turn starting to sweat gets a line about it', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked })
+  await $.turn.start({ text: 'migrate everything', turnId: 't1' })
+  await clock.advance(91_000)
+
+  expect(asked.some(a => a.prompt.includes('dragged on past a minute and a half'))).toBe(true)
 })
 
 test('a long quiet turn gets a fable from Aesop', async ($, on) => {
@@ -381,4 +395,29 @@ test('/face quips chatty captions a wait sooner, and rare later', async ($, on) 
   await $.command.run({ command: 'face', args: 'quips' })
   const back = await $.command.run({ command: 'face', args: 'quips' })
   expect(back.text).toContain('rare')
+})
+
+test('an idle prompt after a task gets a few remarks, and typing holds them off', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked, caption: 'tidy work, if I say so myself' })
+  await $.prompt.submit({ text: 'tidy up the pixel art' })
+  await $.turn.start({ text: 'tidy up the pixel art', turnId: 't1' })
+  await clock.advance(500)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 500, isAborted: false })
+  const afterTurn = asked.length
+
+  await clock.advance(19_000)
+  expect(asked).toHaveLength(afterTurn)
+  await clock.advance(2_000)
+  expect(asked).toHaveLength(afterTurn + 1)
+  expect(asked.at(-1)?.prompt).toContain('The turn is over: it finished after')
+  expect(await faceText($)).toContain('tidy work, if i say so myself')
+
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText: 'n' })
+  await clock.advance(120_000)
+  expect(asked).toHaveLength(afterTurn + 1)
+
+  await $.prompt.edit({ origin: { kind: 'composer' }, text: 'n', cursor: 1, start: 0, end: 1, inputText: '' })
+  await clock.advance(300_000)
+  expect(asked).toHaveLength(afterTurn + 3)
 })

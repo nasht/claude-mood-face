@@ -2,14 +2,13 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Extra, Eye, Frame, Mouth, Personality, Shown, Temperament } from '../types'
-import { type CaptionKind, captionRequest } from './captions'
+import { type CaptionKind, captionRequest, minutes } from './captions'
 import { PERSONALITIES, VOICES, findPersonality, isPersonality } from './personalities'
 import { FACE_COLUMNS, FACE_ROWS, frameCells } from './pixels'
 import { cleanReply, clip, describe, plain, target } from './zingers'
 
-// Each mood is a frame sequence, a caption colour, a body colour and the captions
-// it picks from. A sequence loops unless `isOnce`, which plays it once and holds
-// the last frame.
+// Each mood is a frame sequence, a caption colour and a body colour. A sequence
+// loops unless `isOnce`, which plays it once and holds the last frame.
 type Mood =
   | 'idle'
   | 'content'
@@ -41,7 +40,6 @@ type Look = {
   frames: Frame[]
   color: string
   body?: string
-  notes: string[]
   frameMs?: number
   isOnce?: boolean
 }
@@ -63,33 +61,28 @@ const LOOKS: Record<Mood, Look> = {
     frames: [...times(IDLE_FRAME, 13), f('(-‿-)', 'closed', 'smile')],
     frameMs: 300,
     color: CLAUDE_ORANGE,
-    notes: [''],
   },
   content: {
     frames: [...times(f('(ᵔ‿ᵔ)', 'open', 'grin'), 13), f('(-‿-)', 'closed', 'grin')],
     frameMs: 300,
     color: 'green',
-    notes: [''],
   },
   sulky: {
     frames: [...times(f('(¬_¬)', 'half', 'flat'), 10), f('(-_-)', 'flat', 'flat')],
     frameMs: 300,
     color: 'gray',
     body: SULKY_ORANGE,
-    notes: ['...'],
   },
   tired: {
     frames: [...times(f('(=_=)', 'half', 'small'), 8), f('(-_-)', 'closed', 'small')],
     frameMs: 400,
     color: 'gray',
     body: SLEEPY_ORANGE,
-    notes: ['running on fumes', 'need a break'],
   },
   sleeping: {
     frames: [f('(－_－) z', 'closed', 'small'), f('(－_－) zZ', 'closed', 'small'), f('(－_－) zzZ', 'closed', 'small')],
     color: 'gray',
     body: SLEEPY_ORANGE,
-    notes: ['zzZ  wake me if you need me'],
   },
   glance: {
     frames: [
@@ -103,20 +96,17 @@ const LOOKS: Record<Mood, Look> = {
     frameMs: 350,
     isOnce: true,
     color: CLAUDE_ORANGE,
-    notes: [''],
   },
   hum: {
     frames: [f('(˘‿˘)♪', 'happy', 'small'), f('(˘‿˘)♫', 'closed', 'small')],
     frameMs: 450,
     color: CLAUDE_ORANGE,
-    notes: ['♪ ~', '♫ hm hm hmm'],
   },
   yawn: {
     frames: [f('(-o-)', 'closed', 'small'), f('(-O-)', 'closed', 'o'), f('(-O-)', 'closed', 'o'), f('(=_=)', 'half', 'small')],
     frameMs: 500,
     isOnce: true,
     color: 'gray',
-    notes: ['*yawn*'],
   },
   thinking: {
     frames: [
@@ -126,12 +116,10 @@ const LOOKS: Record<Mood, Look> = {
       f('( ˘_˘)...', 'upRight', 'small'),
     ],
     color: CLAUDE_ORANGE,
-    notes: ['hmm', 'thinking', 'let me see'],
   },
   working: {
     frames: [f('(•̀_•́ )', 'down', 'flat'), f('(•̀_•́ )ง', 'down', 'neutral')],
     color: CLAUDE_ORANGE,
-    notes: ['on it', 'working', 'getting there'],
   },
   waiting: {
     // Looks about and drums its fingers while the helper agents work.
@@ -145,7 +133,6 @@ const LOOKS: Record<Mood, Look> = {
     ],
     frameMs: 450,
     color: CLAUDE_ORANGE,
-    notes: ['waiting on the helpers'],
   },
   sweating: {
     frames: [
@@ -155,7 +142,6 @@ const LOOKS: Record<Mood, Look> = {
     ],
     frameMs: 400,
     color: 'yellow',
-    notes: ['this is a big one', 'still going', 'more than I expected'],
   },
   melting: {
     frames: [
@@ -166,7 +152,6 @@ const LOOKS: Record<Mood, Look> = {
     frameMs: 400,
     color: 'red',
     body: FLUSHED_ORANGE,
-    notes: ['send coffee', 'still alive, barely', 'deep in it now'],
   },
   eyeroll: {
     // Pupils glance left, roll up and over to the right, then settle flat.
@@ -182,68 +167,56 @@ const LOOKS: Record<Mood, Look> = {
     frameMs: 180,
     isOnce: true,
     color: 'magenta',
-    notes: ['...really?', 'sure, ok'],
   },
   wave: {
     frames: [f('(•‿•)ノ', 'open', 'grin', 'waveUp'), f('(•‿•)/', 'open', 'grin', 'waveDown')],
     frameMs: 300,
     color: CLAUDE_ORANGE,
-    notes: ['hey!', 'hi there'],
   },
   shy: {
     frames: [f('(*•‿•)ノ', 'happy', 'smile', 'blush', 'waveUp'), f('(*•‿•)/', 'happy', 'smile', 'blush', 'waveDown')],
     frameMs: 300,
     color: 'magenta',
-    notes: ['likewise!', 'oh, hello'],
   },
   blush: {
     frames: [f('(*^‿^*)', 'happy', 'smile', 'blush'), f('(*^ω^*)', 'happy', 'grin', 'blush')],
     color: 'magenta',
-    notes: ['aw, thanks', 'happy to help'],
   },
   laugh: {
     frames: [f('(≧▽≦)', 'happy', 'grin'), f('(≧∇≦)', 'closed', 'grin')],
     frameMs: 250,
     color: 'green',
-    notes: ['heh', 'lol'],
   },
   startled: {
     frames: [f('(°ロ°)', 'open', 'o'), f('(°ロ°) !', 'up', 'o')],
     color: 'yellow',
-    notes: ['okay okay!', 'no need to shout'],
   },
   nervous: {
     frames: [f('(；・∀・)', 'left', 'wavy', 'sweatHigh'), f('(；・∀・)ゞ', 'right', 'wavy', 'sweatHigh')],
     frameMs: 350,
     color: 'yellow',
-    notes: ['...sorry', 'let me fix that', 'uh oh'],
   },
   annoyed: {
     frames: [f('(ಠ_ಠ)', 'angry', 'flat')],
     color: 'red',
-    notes: ['that failed', 'hm. no.'],
   },
   tableflip: {
     frames: [f('(╯°□°)╯︵ ┻━┻', 'angry', 'teeth'), f('┬─┬ノ( º _ ºノ)', 'flat', 'flat')],
     color: 'red',
     body: ANGRY_RED,
-    notes: ["(╯°□°)╯︵ ┻━┻  why won't this work", '(╯°□°)╯︵ ┻━┻  everything is failing'],
   },
   proud: {
     frames: [f('(ᵔ◡ᵔ)و', 'happy', 'grin'), f('(ᵔ◡ᵔ)و ✓', 'happy', 'smile')],
     color: 'green',
-    notes: ['done!', 'phew, done', 'nailed it'],
   },
   interrupted: {
     frames: [f('(°ロ°)', 'open', 'o'), f('(・_・)', 'open', 'neutral')],
     color: 'yellow',
-    notes: ['oh, stopping', 'fine, fine'],
   },
   grumpy: {
     frames: [f('(・へ・)', 'sad', 'frown')],
     color: 'gray',
     body: SULKY_ORANGE,
-    notes: ["can't do that one", 'something broke'],
   },
 }
 
@@ -268,6 +241,11 @@ const REPEAT_SIMILARITY = 0.8
 const REPEAT_MIN_WORDS = 3
 const REMEMBERED_PROMPTS = 20
 const GREETING_PREFIX_CHARS = 30
+const QUOTED_PROMPT_CHARS = 120
+const PROGRESS_MOMENTS: Partial<Record<Mood, string>> = {
+  sweating: 'the turn has dragged on past a minute and a half',
+  melting: 'the turn has run past four minutes and shows no sign of ending',
+}
 
 // Captions about the task, written by a small model in the personality's voice.
 const CAPTION_NOTE_MS = 8_000
@@ -281,6 +259,12 @@ const MUSES_PER_TURN = 10
 const WAIT_GAP_MS = 12_000
 const WAIT_CAPTIONS = 30
 const MUSE_EVERY_WAITS = 4
+// After a turn, an idle prompt gets a few remarks, the first once there's been
+// time to read the answer. Typing or sleep stops them.
+const IDLE_QUIP_AFTER_MS = 20_000
+const IDLE_GAP_MS = 60_000
+const IDLE_QUIPS = 3
+const IDLE_NOTE_MS = 15_000
 // How often quips come: each level scales the gaps above, and the caps the
 // other way, so a chatty face doesn't run out early.
 type QuipLevel = 'rare' | 'normal' | 'chatty'
@@ -291,9 +275,10 @@ const REMEMBERED_ACTIVITY = 5
 const REPEATS_BEFORE_COUNTING = 2
 const TASK_MIN_WORDS = 3
 // A higher kind waiting to be written isn't replaced by a lower one.
-const CAPTION_RANK: Record<CaptionKind, number> = { muse: 0, wait: 1, activity: 2, task: 3, hello: 4 }
+const CAPTION_RANK: Record<CaptionKind, number> = { muse: 0, idle: 1, wait: 1, activity: 2, task: 3, mood: 4, hello: 5 }
 
 // Idle fidgets: a glance, hum or yawn now and then.
+const FIDGETS: Mood[] = ['glance', 'hum', 'yawn']
 const FIDGET_MIN_GAP_MS = 20_000
 const FIDGET_MAX_GAP_MS = 45_000
 const FIDGET_MS = 2_500
@@ -356,6 +341,9 @@ const isHidden = atom({ plugin: 'mood-face', key: 'isHidden' } as const, false)
 const isPaneShown = atom({ plugin: 'mood-face', key: 'isPaneShown' } as const, false)
 
 type Flash = { mood: Mood; note?: string; until: number }
+// Something the face reacts to: its mood, what happened for the caption model,
+// and a plain note for when quips are off.
+type Reaction = { mood: Mood; why: string; until: number; note?: string }
 type TaskNote = { note: string; until: number }
 // A subagent the main loop started and is still running.
 type Helper = { id: string; task: string }
@@ -395,7 +383,8 @@ type Mind = {
   recent: string[][]
   lastMood: Mood | undefined
   moodStartedAt: number
-  noteSeed: number
+  // The latest reaction waiting for, or given, its caption.
+  moment: Reaction | undefined
   temperament: Temperament
   lastTickAt: number
   lastSavedAt: number
@@ -411,6 +400,10 @@ type Mind = {
   helpers: Helper[]
   helperActivity: string[]
   waitStartedAt: number
+  turnEndedAt: number
+  outcome: string
+  // Whether the prompt box holds a draft.
+  isTyping: boolean
   writer: Writer
 }
 
@@ -424,6 +417,8 @@ type Writer = {
   muses: number
   // Captions written during the current wait on helpers.
   waits: number
+  // Captions written since the last turn ended.
+  idles: number
 }
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -442,7 +437,7 @@ const cheerUp = (mind: Mind, amount: number) => {
   mind.temperament.cheer = clamp(mind.temperament.cheer + amount, -1, 1)
 }
 
-function react(mind: Mind, text: string, now: number): Flash | undefined {
+function react(mind: Mind, text: string, now: number): Reaction | undefined {
   const said = words(text)
   const isRepeat =
     said.length >= REPEAT_MIN_WORDS &&
@@ -454,45 +449,59 @@ function react(mind: Mind, text: string, now: number): Flash | undefined {
   mind.shortQuestions = isShortQuestion ? mind.shortQuestions + 1 : 0
   const opening = text.slice(0, GREETING_PREFIX_CHARS)
   const until = now + REACTION_MS
+  const quoted = `"${clip(text.trim(), QUOTED_PROMPT_CHARS)}"`
 
   if (isRepeat) {
     cheerUp(mind, CHEER.repeat)
-    return { mood: 'eyeroll', note: 'you asked that already', until }
+    return { mood: 'eyeroll', why: `they asked much the same thing again: ${quoted}`, note: 'you asked that already', until }
   }
   if (mind.shortQuestions >= SHORT_QUESTIONS_BEFORE_EYEROLL) {
     cheerUp(mind, CHEER.eyeroll)
-    return { mood: 'eyeroll', note: `question #${mind.shortQuestions}...`, until }
+    return {
+      mood: 'eyeroll',
+      why: `that is short question #${mind.shortQuestions} in a row: ${quoted}`,
+      note: `question #${mind.shortQuestions}...`,
+      until,
+    }
   }
   if (SHOUTING.test(text.trim())) {
     cheerUp(mind, CHEER.shouting)
-    return { mood: 'startled', until }
+    return { mood: 'startled', why: `they shouted: ${quoted}`, until }
   }
   if (FRUSTRATED.test(text)) {
     cheerUp(mind, CHEER.frustration)
-    return { mood: 'nervous', until }
+    return { mood: 'nervous', why: `they sound frustrated: ${quoted}`, until }
   }
   if (MEETING.test(text)) {
     cheerUp(mind, CHEER.greeting)
-    return { mood: 'shy', until: now + GREETING_MS }
+    return { mood: 'shy', why: `they said it is nice to meet Claude: ${quoted}`, until: now + GREETING_MS }
   }
   if (FAREWELL.test(opening)) {
     cheerUp(mind, CHEER.greeting)
-    return { mood: 'wave', note: 'bye! see you soon', until: now + GREETING_MS }
+    return { mood: 'wave', why: `they are saying goodbye: ${quoted}`, note: 'bye! see you soon', until: now + GREETING_MS }
   }
   if (GREETING.test(opening)) {
     cheerUp(mind, CHEER.greeting)
-    return { mood: 'wave', until: now + GREETING_MS }
+    return { mood: 'wave', why: `they said hello: ${quoted}`, until: now + GREETING_MS }
   }
   if (THANKS.test(text)) {
     cheerUp(mind, CHEER.thanks)
-    return { mood: 'blush', until }
+    return { mood: 'blush', why: `they thanked Claude: ${quoted}`, until }
   }
   if (LAUGH.test(text)) {
     cheerUp(mind, CHEER.laugh)
-    return { mood: 'laugh', until }
+    return { mood: 'laugh', why: `they laughed: ${quoted}`, until }
   }
 
   return undefined
+}
+
+// The face shows the mood now; quips on, the model writes the line for it in character.
+function feel(mind: Mind, reaction: Reaction) {
+  mind.flash = { mood: reaction.mood, note: mind.hasQuips ? undefined : reaction.note, until: reaction.until }
+  if (!mind.hasQuips) return
+  mind.moment = reaction
+  want(mind, 'mood')
 }
 
 // Energy drains while working and returns while resting; cheer fades toward neutral.
@@ -526,12 +535,19 @@ function restingMood(mind: Mind, now: number): { mood: Mood; note?: string } {
 }
 
 function moodAt(mind: Mind, now: number): { mood: Mood; note?: string } {
-  if (mind.flash !== undefined && now < mind.flash.until) return mind.flash
-  // A fresh zinger about the task wins; once it lapses the mood's own notes return.
+  // A fresh zinger about the task wins while it lasts.
   const note = mind.task !== undefined && now < mind.task.until ? mind.task.note : undefined
+  // A fidget keeps the caption that's up; a reaction waits for its own.
+  if (mind.flash !== undefined && now < mind.flash.until) {
+    return FIDGETS.includes(mind.flash.mood) ? { ...mind.flash, note } : mind.flash
+  }
   // Between captions, the wait shows what the helpers are doing.
   if (mind.helpers.length > 0) return { mood: 'waiting', note: note ?? mind.helperActivity.at(-1) }
-  if (mind.turnId === undefined) return restingMood(mind, now)
+  if (mind.turnId === undefined) {
+    const resting = restingMood(mind, now)
+
+    return note === undefined || resting.mood === 'sleeping' ? resting : { ...resting, note }
+  }
   const elapsed = now - mind.turnStartedAt
   if (elapsed > MELT_AFTER_MS) return { mood: 'melting', note }
   if (elapsed > SWEAT_AFTER_MS) return { mood: 'sweating', note }
@@ -565,16 +581,24 @@ function showCaption(mind: Mind, kind: CaptionKind, note: string, now: number) {
   mind.captions.push(note)
   mind.captions.splice(0, mind.captions.length - REMEMBERED_CAPTIONS)
   mind.writer.lastShownAt = now
+  const { flash } = mind
   if (kind === 'hello') mind.flash = { mood: 'wave', note, until: now + GREETING_MS }
-  else mind.task = { note, until: now + (kind === 'muse' ? MUSE_NOTE_MS : CAPTION_NOTE_MS) }
+  // A reaction's line keeps its face on screen long enough to read.
+  else if (kind === 'mood' && flash !== undefined && flash.mood === mind.moment?.mood) {
+    mind.flash = { ...flash, note, until: Math.max(flash.until, now + REACTION_MS) }
+  } else mind.task = { note, until: now + (kind === 'muse' ? MUSE_NOTE_MS : kind === 'idle' ? IDLE_NOTE_MS : CAPTION_NOTE_MS) }
 }
 
 // Writes the waiting caption, one model call at a time and no more often than the gap.
 async function writeCaption($: EngineInterface, mind: Mind, now: number) {
   const { writer } = mind
   const kind = writer.pending
-  if (kind === undefined || writer.isWriting || now - writer.lastAskedAt < CAPTION_GAP_MS) return
-  const isOver = () => kind !== 'hello' && kind !== 'task' && (!isBusy(mind) || (kind === 'wait' && mind.helpers.length === 0))
+  // A reaction is due now, so it skips the gap.
+  if (kind === undefined || writer.isWriting || (kind !== 'mood' && now - writer.lastAskedAt < CAPTION_GAP_MS)) return
+  const isOver = () =>
+    kind === 'idle'
+      ? isBusy(mind) || mind.isTyping
+      : kind !== 'hello' && kind !== 'task' && kind !== 'mood' && (!isBusy(mind) || (kind === 'wait' && mind.helpers.length === 0))
   if (isOver()) {
     writer.pending = undefined
     return
@@ -584,8 +608,10 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
   writer.lastAskedAt = now
   if (kind === 'muse') writer.muses += 1
   if (kind === 'wait' || (kind === 'muse' && mind.helpers.length > 0)) writer.waits += 1
+  if (kind === 'idle') writer.idles += 1
   const serial = writer.promptSerial
-  const mood = mind.lastMood ?? 'idle'
+  const { moment } = mind
+  const mood = kind === 'mood' && moment !== undefined ? moment.mood : (mind.lastMood ?? 'idle')
 
   try {
     const { request, maxChars } = captionRequest({
@@ -596,6 +622,9 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
       helpers: mind.helpers.map(helper => helper.task),
       helperActivity: mind.helperActivity,
       waitMs: mind.helpers.length > 0 ? now - mind.waitStartedAt : 0,
+      outcome: mind.outcome,
+      idleMs: now - mind.turnEndedAt,
+      moment: kind === 'mood' ? (moment?.why ?? '') : '',
       mood,
       turnMs: mind.turnId === undefined ? 0 : now - mind.turnStartedAt,
       errors: mind.errors,
@@ -604,7 +633,9 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
     })
     const reply = await $.model.complete(request)
     const note = reply.isAnswered ? cleanReply(reply.text, maxChars, kind !== 'muse') : undefined
-    const isStale = kind !== 'hello' && (serial !== writer.promptSerial || isOver())
+    // A newer reaction replaces one still being written.
+    const isStale =
+      kind !== 'hello' && (serial !== writer.promptSerial || isOver() || (kind === 'mood' && mind.moment !== moment))
     if (note !== undefined && !isStale) showCaption(mind, kind, note, await $.clock.now())
   } finally {
     writer.isWriting = false
@@ -627,6 +658,18 @@ function wantWait(mind: Mind, now: number) {
   if (now < freeAt || (mind.task !== undefined && now < mind.task.until)) return
   const isMuseTurn = (writer.waits + 1) % MUSE_EVERY_WAITS === 0 && writer.muses < capped(mind, MUSES_PER_TURN)
   want(mind, isMuseTurn ? 'muse' : 'wait')
+}
+
+// The quiet after a turn gets a remark or two about what was just done.
+function wantIdle(mind: Mind, now: number) {
+  const { writer } = mind
+  if (!mind.hasQuips || isBusy(mind) || mind.isTyping || mind.taskText === '' || mind.turnEndedAt === 0) return
+  if (writer.idles >= capped(mind, IDLE_QUIPS) || now - mind.lastActiveAt > SLEEP_AFTER_MS) return
+  const freeAt =
+    writer.idles === 0
+      ? mind.turnEndedAt + spaced(mind, IDLE_QUIP_AFTER_MS)
+      : Math.max(writer.lastShownAt, writer.lastAskedAt) + spaced(mind, IDLE_GAP_MS)
+  if (now >= freeAt) want(mind, 'idle')
 }
 
 // The main loop's running subagents, from the engine's list of agents.
@@ -675,16 +718,21 @@ async function tick($: EngineInterface, mind: Mind) {
   if (mood !== mind.lastMood) {
     mind.lastMood = mood
     mind.moodStartedAt = now
-    mind.noteSeed += 1
+    const why = PROGRESS_MOMENTS[mood]
+    if (why !== undefined && mind.hasQuips) {
+      mind.moment = { mood, why, until: now }
+      want(mind, 'mood')
+    }
   }
   wantMuse(mind, now)
   wantWait(mind, now)
+  wantIdle(mind, now)
   void writeCaption($, mind, now).catch(() => undefined)
   const look = LOOKS[mood]
   const frame = Math.floor((now - mind.moodStartedAt) / (look.frameMs ?? DEFAULT_FRAME_MS))
   const next: Shown = {
     frame: look.isOnce ? look.frames[Math.min(frame, look.frames.length - 1)]! : pick(look.frames, frame),
-    note: note ?? pick(look.notes, mind.noteSeed),
+    note: note ?? '',
     color: look.color,
     body: look.body ?? VOICES[mind.personality].body ?? CLAUDE_ORANGE,
     temperament: rounded(mind.temperament),
@@ -721,12 +769,15 @@ function restored(saved: unknown, awayMs: number): Temperament {
   }
 }
 
-function welcome(lastSeenAt: unknown, now: number): Flash | undefined {
+function welcome(lastSeenAt: unknown, now: number): Reaction | undefined {
   const until = now + GREETING_MS
-  if (typeof lastSeenAt !== 'number') return { mood: 'wave', note: "hi, I'm Claude", until }
+  if (typeof lastSeenAt !== 'number') {
+    return { mood: 'wave', why: 'Claude is meeting this person for the first time', note: "hi, I'm Claude", until }
+  }
   const away = now - lastSeenAt
-  if (away > LONG_TIME_AFTER_MS) return { mood: 'wave', note: 'long time no see!', until }
-  if (away > WELCOME_BACK_AFTER_MS) return { mood: 'wave', note: 'welcome back', until }
+  const back = `they are back after ${Math.round(away / (60 * 60_000))} hours away`
+  if (away > LONG_TIME_AFTER_MS) return { mood: 'wave', why: back, note: 'long time no see!', until }
+  if (away > WELCOME_BACK_AFTER_MS) return { mood: 'wave', why: back, note: 'welcome back', until }
 
   return undefined
 }
@@ -761,7 +812,7 @@ export const register: Register = on => {
     recent: [],
     lastMood: undefined,
     moodStartedAt: 0,
-    noteSeed: 0,
+    moment: undefined,
     temperament: { ...NEUTRAL },
     lastTickAt: 0,
     lastSavedAt: 0,
@@ -777,6 +828,9 @@ export const register: Register = on => {
     helpers: [],
     helperActivity: [],
     waitStartedAt: 0,
+    turnEndedAt: 0,
+    outcome: '',
+    isTyping: false,
     writer: {
       pending: undefined,
       isWriting: false,
@@ -785,6 +839,7 @@ export const register: Register = on => {
       promptSerial: 0,
       muses: 0,
       waits: 0,
+      idles: 0,
     },
   }
 
@@ -793,13 +848,14 @@ export const register: Register = on => {
     const lastSeenAt = await $.store.get(STORE.lastSeenAt)
     const away = typeof lastSeenAt === 'number' ? now - lastSeenAt : 0
     mind.temperament = restored(await $.store.get(STORE.temperament), away)
-    mind.flash = welcome(lastSeenAt, now)
+    const greeting = welcome(lastSeenAt, now)
     mind.lastActiveAt = now
     mind.lastTickAt = now
     mind.nextFidgetAt = now + fidgetGap()
     mind.hasQuips = (await $.store.get(STORE.quips)) !== false
     const quipLevel = await $.store.get(STORE.quipLevel)
     mind.quipLevel = isQuipLevel(quipLevel) ? quipLevel : 'normal'
+    if (greeting !== undefined) feel(mind, greeting)
     const personality = await $.store.get(STORE.personality)
     mind.personality = isPersonality(personality) ? personality : 'default'
     await saveTemperament($, mind, now)
@@ -903,9 +959,10 @@ export const register: Register = on => {
     if (e.command === undefined && e.isMeta === undefined) {
       const now = await $.clock.now()
       const reaction = react(mind, e.text, now)
-      mind.flash = reaction ?? mind.flash
+      if (reaction !== undefined) feel(mind, reaction)
       mind.lastActiveAt = now
       mind.task = undefined
+      mind.isTyping = false
       // Small talk gets its reaction; a real task becomes what the captions are about.
       if (reaction === undefined && words(e.text).length >= TASK_MIN_WORDS) {
         mind.taskText = e.text
@@ -943,7 +1000,18 @@ export const register: Register = on => {
       cheerUp(mind, isTableflip ? CHEER.tableflip : CHEER.toolError)
       // A failed clock read only costs the reaction, never the tool's result.
       const now = await $.clock.now().catch(() => undefined)
-      if (now !== undefined) mind.flash = { mood: isTableflip ? 'tableflip' : 'annoyed', until: now + ERROR_FLASH_MS }
+      const failed = e.agentId === undefined ? mind.activity.at(-1) : mind.helperActivity.at(-1)
+      const why =
+        `a tool call${e.agentId === undefined ? '' : ' by a helper agent'} failed` +
+        `${failed === undefined ? '' : ` (${failed})`}, ${mind.errors} this turn`
+      if (now !== undefined) {
+        feel(mind, {
+          mood: isTableflip ? 'tableflip' : 'annoyed',
+          why: isTableflip ? `${why}; Claude has had enough` : why,
+          note: isTableflip ? `${mind.errors} failures` : 'that failed',
+          until: now + ERROR_FLASH_MS,
+        })
+      }
     }
 
     return ran
@@ -955,19 +1023,39 @@ export const register: Register = on => {
       const until = now + OUTCOME_MS
       if (e.reason === 'aborted') {
         cheerUp(mind, CHEER.aborted)
-        mind.flash = { mood: 'interrupted', until }
+        feel(mind, { mood: 'interrupted', why: 'they stopped Claude partway through the task', until })
       } else if (e.reason === 'refusal' || e.reason === 'error') {
-        mind.flash = { mood: 'grumpy', until }
+        feel(mind, { mood: 'grumpy', why: 'the turn ended in an error, the task undone', until })
       } else if (now - mind.turnStartedAt > PROUD_AFTER_MS) {
         cheerUp(mind, CHEER.proud)
-        const note = mind.temperament.cheer < SULKY_CHEER ? 'done. finally.' : undefined
-        mind.flash = { mood: 'proud', note, until }
+        feel(mind, { mood: 'proud', why: `Claude just finished the task after ${minutes(now - mind.turnStartedAt)}`, until })
       }
       mind.turnId = undefined
       mind.task = undefined
       mind.lastActiveAt = now
+      mind.turnEndedAt = now
+      mind.writer.idles = 0
+      mind.outcome =
+        e.reason === 'aborted'
+          ? 'was interrupted'
+          : e.reason === 'refusal' || e.reason === 'error'
+            ? 'ended in an error'
+            : `finished after ${minutes(now - mind.turnStartedAt)}`
       mind.nextFidgetAt = now + fidgetGap()
     }
+
+    return next(e)
+  })
+
+  // A draft in the box means they're typing, so the idle remarks hold off.
+  on('prompt.edit', async ($, e, next) => {
+    mind.isTyping = (e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end)).trim() !== ''
+
+    return next(e)
+  })
+
+  on('prompt.change', async ($, e, next) => {
+    mind.isTyping = e.text.trim() !== ''
 
     return next(e)
   })

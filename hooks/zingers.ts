@@ -135,13 +135,23 @@ export function target(tool: string, input: Input): string | undefined {
   return undefined
 }
 
-// The model's reply as a caption: its first line, unquoted and short.
+// The model's reply as a caption: its lines run together, unquoted, and cut at
+// a word if it runs past the room.
 export function cleanReply(reply: string, max: number, isLowered: boolean): string | undefined {
-  const line = (reply.split('\n').find(l => l.trim() !== '') ?? '')
-    .trim()
+  const line = reply
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean)
+    .join(' ')
     .replace(/^["'`]+|["'`]+$/g, '')
     .replace(/\.$/, '')
     .trim()
 
-  return line === '' ? undefined : clip(isLowered ? line.toLowerCase() : line, max)
+  if (line === '') return undefined
+  const text = isLowered ? line.toLowerCase() : line
+  if (text.length <= max) return text
+  const cut = text.slice(0, max - 1)
+  const lastSpace = cut.lastIndexOf(' ')
+
+  return (lastSpace > max / 2 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:.-]+$/, '') + '…'
 }

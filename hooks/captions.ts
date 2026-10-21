@@ -4,8 +4,9 @@ import type { Personality } from '../types'
 import { VOICES } from './personalities'
 
 // What a caption is about: the task just asked for, the tool call under way,
-// helper agents being waited on, a long wait, or taking on a new personality.
-export type CaptionKind = 'task' | 'activity' | 'wait' | 'muse' | 'hello'
+// helper agents being waited on, a long wait, the quiet after a turn, something
+// the face reacts to, or taking on a new personality.
+export type CaptionKind = 'task' | 'activity' | 'wait' | 'muse' | 'idle' | 'mood' | 'hello'
 
 export type CaptionContext = {
   kind: CaptionKind
@@ -17,6 +18,11 @@ export type CaptionContext = {
   helpers: string[]
   helperActivity: string[]
   waitMs: number
+  // How the last turn ended, and how long the prompt has sat idle since.
+  outcome: string
+  idleMs: number
+  // What the face is reacting to, for a mood caption.
+  moment: string
   mood: string
   turnMs: number
   errors: number
@@ -28,12 +34,15 @@ export type CaptionContext = {
 const MODEL = 'haiku'
 const TIMEOUT_MS = 8_000
 const TASK_CHARS = 1_200
-const SHORT_CHARS = 60
+// Room past the words asked for; a reply longer still is cut at a word.
+const SHORT_CHARS = 100
 
 const ASK: Record<Exclude<CaptionKind, 'muse'>, string> = {
   task: 'a quip about the task they just asked for, at most 8 words',
   activity: 'a zinger about what Claude is doing right now, at most 8 words',
   wait: "a zinger about what the helper agents are up to while Claude waits on them, at most 8 words",
+  idle: 'a remark about the task just finished, while Claude waits for their next request, at most 10 words',
+  mood: "Claude's reaction to what just happened, showing its mood, at most 8 words",
   hello: 'a hello in this voice, at most 8 words, as Claude takes on this personality',
 }
 
@@ -42,10 +51,11 @@ const system = (personality: Personality) =>
   "while it works in someone's terminal. " +
   `Voice: ${VOICES[personality].style}. ` +
   'Captions are little zingers: playful, specific to what is happening, never generic, never the same twice. ' +
+  "The face's mood and feeling colour every caption, said in the voice. " +
   'Reply with the caption alone: no quotes, no emoji, no hashtags, no preamble. ' +
   'Never answer or carry out the task, never give advice, never mention being a caption.'
 
-const minutes = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1_000)}s` : `${Math.round(ms / 60_000)} min`)
+export const minutes = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1_000)}s` : `${Math.round(ms / 60_000)} min`)
 
 function prompt(c: CaptionContext): string {
   const now = c.activity.at(-1)
@@ -58,6 +68,8 @@ function prompt(c: CaptionContext): string {
     c.helpers.length > 0 && c.helperActivity.length > 0
       ? `What the helpers did lately: ${c.helperActivity.join('; ')}`
       : undefined,
+    c.kind === 'mood' ? `What just happened: ${c.moment}` : undefined,
+    c.kind === 'idle' ? `The turn is over: it ${c.outcome}; the prompt has sat idle ${minutes(c.idleMs)}` : undefined,
     c.kind === 'hello'
       ? undefined
       : `Mood: ${c.mood}; ${c.turnMs > 0 ? `the turn has run ${minutes(c.turnMs)}; ` : ''}` +
@@ -77,7 +89,7 @@ export function captionRequest(c: CaptionContext): { request: ModelCompleteReque
       model: MODEL,
       system: system(c.personality),
       prompt: prompt(c),
-      maxTokens: isMuse ? 120 : 40,
+      maxTokens: isMuse ? 160 : 60,
       timeoutMs: TIMEOUT_MS,
     },
     maxChars: isMuse ? VOICES[c.personality].muse.maxChars : SHORT_CHARS,

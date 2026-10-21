@@ -14,7 +14,7 @@ type Voice = {
   aliases: string[]
 }
 
-const REMARK = { ask: 'a remark, at most 12 words, to pass the time while this long task runs', maxChars: 80 }
+const REMARK = { ask: 'a remark, at most 12 words, to pass the time while this long task runs', maxChars: 120 }
 
 export const VOICES: Record<Personality, Voice> = {
   default: {
@@ -43,7 +43,7 @@ export const VOICES: Record<Personality, Voice> = {
     style:
       'a gloomy, chronically depressed robot with a vast intellect, wearily resigned to menial tasks, ' +
       'sighing at the futility of it all (in the spirit of Marvin from The Hitchhiker\'s Guide, without quoting the books)',
-    muse: { ask: 'one gloomy observation, at most 16 words, about how long this is taking', maxChars: 100 },
+    muse: { ask: 'one gloomy observation, at most 16 words, about how long this is taking', maxChars: 150 },
     badge: '⌁',
     body: '#8a8f99',
     aliases: ['robot', 'depressed', 'paranoid', 'android'],
@@ -58,7 +58,7 @@ export const VOICES: Record<Personality, Voice> = {
   narrator: {
     label: 'a nature documentary',
     style: 'a hushed, reverent nature-documentary narrator watching a coding assistant as if it were a wild animal',
-    muse: { ask: 'one hushed line of narration, at most 18 words, about the creature still at work', maxChars: 110 },
+    muse: { ask: 'one hushed line of narration, at most 18 words, about the creature still at work', maxChars: 165 },
     badge: '❦',
     aliases: ['documentary', 'nature', 'wildlife'],
   },
@@ -72,14 +72,14 @@ export const VOICES: Record<Personality, Voice> = {
   bard: {
     label: 'a Shakespearean actor',
     style: 'a melodramatic Shakespearean actor speaking in Elizabethan English',
-    muse: { ask: 'one melodramatic line of verse, at most 16 words, lamenting the long wait', maxChars: 100 },
+    muse: { ask: 'one melodramatic line of verse, at most 16 words, lamenting the long wait', maxChars: 150 },
     badge: '✒',
     aliases: ['shakespeare', 'actor', 'thespian'],
   },
   zen: {
     label: 'a zen monk',
     style: 'a serene zen monk speaking in calm, minimal, koan-like phrases',
-    muse: { ask: 'one short koan, at most 14 words, suggested by the task', maxChars: 90 },
+    muse: { ask: 'one short koan, at most 14 words, suggested by the task', maxChars: 135 },
     badge: '○',
     aliases: ['monk', 'calm'],
   },
@@ -88,7 +88,7 @@ export const VOICES: Record<Personality, Voice> = {
     style: 'a pensive philosopher who meets every task with a wry philosophical observation',
     muse: {
       ask: 'one short philosophical idea, at most 22 words, that the task brings to mind: wry, original, not preachy',
-      maxChars: 140,
+      maxChars: 210,
     },
     badge: '∴',
     aliases: ['philosophy', 'socrates', 'thinker'],
@@ -98,7 +98,7 @@ export const VOICES: Record<Personality, Voice> = {
     style: 'a teller of animal fables in the manner of Aesop, who sees every task as a fable with a moral',
     muse: {
       ask: 'one very short original fable, at most 32 words, with animals, loosely about the task, ending "moral:" and a short moral',
-      maxChars: 200,
+      maxChars: 300,
     },
     badge: '❧',
     aliases: ['fable', 'fables', 'fabulist'],
@@ -108,14 +108,14 @@ export const VOICES: Record<Personality, Voice> = {
     style:
       'a gruff, world-weary barfly poet in the spirit of Charles Bukowski: blunt, unsentimental and darkly funny, ' +
       'thinking of cheap wine, the racetrack and long nights at the typewriter (without quoting his work, never explicit)',
-    muse: { ask: 'a few lines of blunt free verse, at most 20 words, about the long wait', maxChars: 130 },
+    muse: { ask: 'a few lines of blunt free verse, at most 20 words, about the long wait', maxChars: 195 },
     badge: '¶',
     aliases: ['hank', 'chinaski', 'barfly', 'poet'],
   },
   hippie: {
     label: 'a laid-back hippie',
     style: 'a mellow 1960s hippie, all peace, love, good vibes and cosmic flow, finding everything far out',
-    muse: { ask: 'one far-out cosmic thought, at most 16 words, that the task brings on', maxChars: 100 },
+    muse: { ask: 'one far-out cosmic thought, at most 16 words, that the task brings on', maxChars: 150 },
     badge: '☮',
     aliases: ['hippy', 'groovy', 'flower'],
   },
@@ -124,9 +124,19 @@ export const VOICES: Record<Personality, Voice> = {
     style:
       'a fast-talking, cheeky London geezer: rapid-fire banter, a bit of rhyming slang, ' +
       '"innit", "sorted", "proper", "my son", always angling for the laugh',
-    muse: { ask: 'one burst of rapid-fire cheeky banter, at most 18 words, about how long this is taking', maxChars: 110 },
+    muse: { ask: 'one burst of rapid-fire cheeky banter, at most 18 words, about how long this is taking', maxChars: 165 },
     badge: '£',
     aliases: ['london', 'cockney', 'guvnor', 'londoner'],
+  },
+  holmes: {
+    label: 'the great detective',
+    style:
+      'the great Victorian consulting detective in the manner of Sherlock Holmes: brisk, brilliant and a touch smug, ' +
+      'drawing sweeping deductions from the smallest details of the task, now and then addressing an absent Watson ' +
+      '(without quoting the stories)',
+    muse: { ask: 'one brisk deduction, at most 20 words, drawn from a small detail of the task', maxChars: 195 },
+    badge: '⊙',
+    aliases: ['sherlock', 'sleuth', 'deduction'],
   },
 }
 
