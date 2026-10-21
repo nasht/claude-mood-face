@@ -103,6 +103,31 @@ export const VOICES: Record<Personality, Voice> = {
     badge: '❧',
     aliases: ['fable', 'fables', 'fabulist'],
   },
+  bukowski: {
+    label: 'a barfly poet',
+    style:
+      'a gruff, world-weary barfly poet in the spirit of Charles Bukowski: blunt, unsentimental and darkly funny, ' +
+      'thinking of cheap wine, the racetrack and long nights at the typewriter (without quoting his work, never explicit)',
+    muse: { ask: 'a few lines of blunt free verse, at most 20 words, about the long wait', maxChars: 130 },
+    badge: '¶',
+    aliases: ['hank', 'chinaski', 'barfly', 'poet'],
+  },
+  hippie: {
+    label: 'a laid-back hippie',
+    style: 'a mellow 1960s hippie, all peace, love, good vibes and cosmic flow, finding everything far out',
+    muse: { ask: 'one far-out cosmic thought, at most 16 words, that the task brings on', maxChars: 100 },
+    badge: '☮',
+    aliases: ['hippy', 'groovy', 'flower'],
+  },
+  geezer: {
+    label: 'a London geezer',
+    style:
+      'a fast-talking, cheeky London geezer: rapid-fire banter, a bit of rhyming slang, ' +
+      '"innit", "sorted", "proper", "my son", always angling for the laugh',
+    muse: { ask: 'one burst of rapid-fire cheeky banter, at most 18 words, about how long this is taking', maxChars: 110 },
+    badge: '£',
+    aliases: ['london', 'cockney', 'guvnor', 'londoner'],
+  },
 }
 
 export const PERSONALITIES = Object.keys(VOICES) as Personality[]

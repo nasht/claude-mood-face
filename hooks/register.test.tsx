@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import type { EngineInterface, On } from 'claude-code'
+import type { AgentInfo, EngineInterface, On } from 'claude-code'
 
 const BAND = {
   plugin: 'mood-face',
@@ -23,6 +23,8 @@ type Setup = {
   isToolOk?: boolean
   caption?: string
   asked?: Asked[]
+  // The session's agents, which a test may change as they start and finish.
+  agents?: AgentInfo[]
 }
 
 const USAGE = { input_tokens: 1, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
@@ -35,6 +37,7 @@ async function start($: EngineInterface, on: On, setup: Setup = {}) {
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
   on('ui.panes', () => ({ value: setup.isPaneShown ? [pane] : [] }))
+  on('agent.list', () => ({ value: setup.agents ?? [] }))
   on('command.register', () => ({ value: { command: 'face' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('prompt.submit', (_, e) => ({ text: e.text }))
@@ -318,4 +321,64 @@ test('a personality is found by prefix, greets in its voice and wears its flouri
   expect(await faceText($)).toContain('∴')
   expect(await faceText($)).toContain('what is a face, really')
   expect(await paneCells($)).not.toBe(plainCells)
+})
+
+const HELPER: AgentInfo = { id: 'a1', description: 'survey the pixel art', type: 'Explore', status: 'running' }
+
+test('waiting on a subagent shows what it is doing, with captions about it', async ($, on) => {
+  const asked: Asked[] = []
+  const agents: AgentInfo[] = []
+  const clock = await start($, on, { isToolOk: true, asked, agents, caption: 'the explorer has found pixels' })
+  await $.turn.start({ text: 'review the face', turnId: 't1' })
+  agents.push(HELPER)
+  await clock.advance(1_100)
+  await $.tool.call({ tool: 'Read', file_path: '/hooks/pixels.ts', agentId: 'a1' })
+  await clock.advance(300)
+  expect(await faceText($)).toContain('reading pixels.ts')
+
+  await clock.advance(12_000)
+  expect(asked.at(-1)?.prompt).toContain('helper agents doing: survey the pixel art')
+  expect(asked.at(-1)?.prompt).toContain('What the helpers did lately: reading pixels.ts')
+  expect(await faceText($)).toContain('the explorer has found pixels')
+
+  // A long wait keeps talking, a muse among the quips.
+  await clock.advance(60_000)
+  expect(asked.some(a => a.prompt.includes('to pass the time'))).toBe(true)
+  expect(asked.length).toBeGreaterThanOrEqual(5)
+})
+
+test('captions about the wait stop once the subagents finish', async ($, on) => {
+  const asked: Asked[] = []
+  const agents: AgentInfo[] = [HELPER]
+  const clock = await start($, on, { isToolOk: true, asked, agents })
+  await clock.advance(13_500)
+  const during = asked.length
+  expect(during).toBeGreaterThan(0)
+
+  agents[0] = { ...HELPER, status: 'completed' }
+  await clock.advance(60_000)
+  expect(asked).toHaveLength(during)
+})
+
+test('/face quips chatty captions a wait sooner, and rare later', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked, agents: [HELPER] })
+  const chatty = await $.command.run({ command: 'face', args: 'quips chatty' })
+  expect(chatty.text).toContain('chatty')
+  await clock.advance(7_500)
+  expect(asked).toHaveLength(1)
+
+  const unknown = await $.command.run({ command: 'face', args: 'quips loud' })
+  expect(unknown.text).toContain('rare')
+
+  await $.command.run({ command: 'face', args: 'quips rare' })
+  await clock.advance(20_000)
+  expect(asked).toHaveLength(1)
+  await clock.advance(5_000)
+  expect(asked).toHaveLength(2)
+
+  // Toggled off and on, it comes back at the level last chosen.
+  await $.command.run({ command: 'face', args: 'quips' })
+  const back = await $.command.run({ command: 'face', args: 'quips' })
+  expect(back.text).toContain('rare')
 })

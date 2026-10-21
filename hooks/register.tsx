@@ -5,7 +5,7 @@ import type { Extra, Eye, Frame, Mouth, Personality, Shown, Temperament } from '
 import { type CaptionKind, captionRequest } from './captions'
 import { PERSONALITIES, VOICES, findPersonality, isPersonality } from './personalities'
 import { FACE_COLUMNS, FACE_ROWS, frameCells } from './pixels'
-import { cleanReply, describe, plain, target } from './zingers'
+import { cleanReply, clip, describe, plain, target } from './zingers'
 
 // Each mood is a frame sequence, a caption colour, a body colour and the captions
 // it picks from. A sequence loops unless `isOnce`, which plays it once and holds
@@ -21,6 +21,7 @@ type Mood =
   | 'yawn'
   | 'thinking'
   | 'working'
+  | 'waiting'
   | 'sweating'
   | 'melting'
   | 'eyeroll'
@@ -132,6 +133,20 @@ const LOOKS: Record<Mood, Look> = {
     color: CLAUDE_ORANGE,
     notes: ['on it', 'working', 'getting there'],
   },
+  waiting: {
+    // Looks about and drums its fingers while the helper agents work.
+    frames: [
+      ...times(f('(•_•)', 'open', 'small'), 3),
+      ...times(f('(•_•)', 'left', 'small'), 2),
+      f('(•_•)', 'open', 'small'),
+      ...times(f('(•_•)', 'upRight', 'small'), 2),
+      ...times(f('(•_•)', 'right', 'small'), 2),
+      f('(-_-)', 'closed', 'small'),
+    ],
+    frameMs: 450,
+    color: CLAUDE_ORANGE,
+    notes: ['waiting on the helpers'],
+  },
   sweating: {
     frames: [
       f('(•_•;)', 'open', 'wavy', 'sweatHigh'),
@@ -234,6 +249,7 @@ const LOOKS: Record<Mood, Look> = {
 
 const TICK_MS = 150
 const PANE_SYNC_MS = 1_000
+const HELPER_SYNC_MS = 1_000
 const DEFAULT_FRAME_MS = 600
 const MIN_NOTE_COLUMNS = 12
 const THINKING_UNTIL_MS = 20_000
@@ -260,12 +276,22 @@ const CAPTION_GAP_MS = 3_000 // at most one model call this often
 const ACTIVITY_GAP_MS = 30_000 // tool calls get a caption only this long after the last one
 const MUSE_AFTER_MS = 45_000 // a turn this long, quiet this long, gets an idea or fable
 const MUSES_PER_TURN = 10
+// Waiting on helper agents gets a caption this long after the last one, up to a
+// cap per wait; every few is a muse instead.
+const WAIT_GAP_MS = 12_000
+const WAIT_CAPTIONS = 30
+const MUSE_EVERY_WAITS = 4
+// How often quips come: each level scales the gaps above, and the caps the
+// other way, so a chatty face doesn't run out early.
+type QuipLevel = 'rare' | 'normal' | 'chatty'
+const QUIP_LEVELS: QuipLevel[] = ['rare', 'normal', 'chatty']
+const QUIP_SPACING: Record<QuipLevel, number> = { rare: 2, normal: 1, chatty: 0.5 }
 const REMEMBERED_CAPTIONS = 8
 const REMEMBERED_ACTIVITY = 5
 const REPEATS_BEFORE_COUNTING = 2
 const TASK_MIN_WORDS = 3
 // A higher kind waiting to be written isn't replaced by a lower one.
-const CAPTION_RANK: Record<CaptionKind, number> = { muse: 0, activity: 1, task: 2, hello: 3 }
+const CAPTION_RANK: Record<CaptionKind, number> = { muse: 0, wait: 1, activity: 2, task: 3, hello: 4 }
 
 // Idle fidgets: a glance, hum or yawn now and then.
 const FIDGET_MIN_GAP_MS = 20_000
@@ -306,7 +332,14 @@ const PANE = 'mood-face'
 const PANE_COLUMNS = 22
 const METER_CELLS = 5
 
-const STORE = { temperament: 'temperament', lastSeenAt: 'lastSeenAt', placement: 'placement', quips: 'quips', personality: 'personality' } as const
+const STORE = {
+  temperament: 'temperament',
+  lastSeenAt: 'lastSeenAt',
+  placement: 'placement',
+  quips: 'quips',
+  quipLevel: 'quipLevel',
+  personality: 'personality',
+} as const
 type Placement = 'corner' | 'band'
 
 const NEUTRAL: Temperament = { cheer: 0, energy: 1 }
@@ -324,6 +357,8 @@ const isPaneShown = atom({ plugin: 'mood-face', key: 'isPaneShown' } as const, f
 
 type Flash = { mood: Mood; note?: string; until: number }
 type TaskNote = { note: string; until: number }
+// A subagent the main loop started and is still running.
+type Helper = { id: string; task: string }
 
 const words = (text: string) =>
   text
@@ -368,10 +403,14 @@ type Mind = {
   task: TaskNote | undefined
   repeats: Map<string, number>
   hasQuips: boolean
+  quipLevel: QuipLevel
   personality: Personality
   taskText: string
   activity: string[]
   captions: string[]
+  helpers: Helper[]
+  helperActivity: string[]
+  waitStartedAt: number
   writer: Writer
 }
 
@@ -383,12 +422,21 @@ type Writer = {
   // Bumped by each new prompt, so a reply about the previous task is dropped.
   promptSerial: number
   muses: number
+  // Captions written during the current wait on helpers.
+  waits: number
 }
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
 const hexColor = (hex: string) => Number.parseInt(hex.slice(1), 16)
 const pick = <T,>(list: T[], seed: number) => list[seed % list.length]!
 const fidgetGap = () => FIDGET_MIN_GAP_MS + Math.random() * (FIDGET_MAX_GAP_MS - FIDGET_MIN_GAP_MS)
+
+// A turn under way, or helper agents still running after it.
+const spaced = (mind: Mind, ms: number) => ms * QUIP_SPACING[mind.quipLevel]
+const capped = (mind: Mind, cap: number) => Math.round(cap / QUIP_SPACING[mind.quipLevel])
+const isQuipLevel = (value: unknown): value is QuipLevel => QUIP_LEVELS.includes(value as QuipLevel)
+
+const isBusy = (mind: Mind) => mind.turnId !== undefined || mind.helpers.length > 0
 
 const cheerUp = (mind: Mind, amount: number) => {
   mind.temperament.cheer = clamp(mind.temperament.cheer + amount, -1, 1)
@@ -479,9 +527,11 @@ function restingMood(mind: Mind, now: number): { mood: Mood; note?: string } {
 
 function moodAt(mind: Mind, now: number): { mood: Mood; note?: string } {
   if (mind.flash !== undefined && now < mind.flash.until) return mind.flash
-  if (mind.turnId === undefined) return restingMood(mind, now)
   // A fresh zinger about the task wins; once it lapses the mood's own notes return.
   const note = mind.task !== undefined && now < mind.task.until ? mind.task.note : undefined
+  // Between captions, the wait shows what the helpers are doing.
+  if (mind.helpers.length > 0) return { mood: 'waiting', note: note ?? mind.helperActivity.at(-1) }
+  if (mind.turnId === undefined) return restingMood(mind, now)
   const elapsed = now - mind.turnStartedAt
   if (elapsed > MELT_AFTER_MS) return { mood: 'melting', note }
   if (elapsed > SWEAT_AFTER_MS) return { mood: 'sweating', note }
@@ -507,7 +557,7 @@ function noteToolCall(mind: Mind, tool: string, input: Record<string, unknown>, 
   else {
     // Only the occasional step gets a quip; narrating every one is too much.
     const lastAt = Math.max(mind.writer.lastShownAt, mind.writer.lastAskedAt)
-    if (lastAt === 0 || now - lastAt >= ACTIVITY_GAP_MS) want(mind, 'activity')
+    if (lastAt === 0 || now - lastAt >= spaced(mind, ACTIVITY_GAP_MS)) want(mind, 'activity')
   }
 }
 
@@ -524,7 +574,8 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
   const { writer } = mind
   const kind = writer.pending
   if (kind === undefined || writer.isWriting || now - writer.lastAskedAt < CAPTION_GAP_MS) return
-  if (kind !== 'hello' && kind !== 'task' && mind.turnId === undefined) {
+  const isOver = () => kind !== 'hello' && kind !== 'task' && (!isBusy(mind) || (kind === 'wait' && mind.helpers.length === 0))
+  if (isOver()) {
     writer.pending = undefined
     return
   }
@@ -532,6 +583,7 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
   writer.isWriting = true
   writer.lastAskedAt = now
   if (kind === 'muse') writer.muses += 1
+  if (kind === 'wait' || (kind === 'muse' && mind.helpers.length > 0)) writer.waits += 1
   const serial = writer.promptSerial
   const mood = mind.lastMood ?? 'idle'
 
@@ -541,6 +593,9 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
       personality: mind.personality,
       task: mind.taskText,
       activity: mind.activity,
+      helpers: mind.helpers.map(helper => helper.task),
+      helperActivity: mind.helperActivity,
+      waitMs: mind.helpers.length > 0 ? now - mind.waitStartedAt : 0,
       mood,
       turnMs: mind.turnId === undefined ? 0 : now - mind.turnStartedAt,
       errors: mind.errors,
@@ -549,7 +604,7 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
     })
     const reply = await $.model.complete(request)
     const note = reply.isAnswered ? cleanReply(reply.text, maxChars, kind !== 'muse') : undefined
-    const isStale = kind !== 'hello' && (serial !== writer.promptSerial || (kind !== 'task' && mind.turnId === undefined))
+    const isStale = kind !== 'hello' && (serial !== writer.promptSerial || isOver())
     if (note !== undefined && !isStale) showCaption(mind, kind, note, await $.clock.now())
   } finally {
     writer.isWriting = false
@@ -559,8 +614,47 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
 // A long turn that has gone quiet gets an idea, a fable or a remark, depending on the voice.
 function wantMuse(mind: Mind, now: number) {
   const { writer } = mind
-  const isQuiet = now - Math.max(writer.lastShownAt, mind.turnStartedAt) >= MUSE_AFTER_MS
-  if (mind.hasQuips && mind.turnId !== undefined && isQuiet && writer.muses < MUSES_PER_TURN) want(mind, 'muse')
+  const isQuiet = now - Math.max(writer.lastShownAt, mind.turnStartedAt) >= spaced(mind, MUSE_AFTER_MS)
+  if (mind.hasQuips && mind.turnId !== undefined && isQuiet && writer.muses < capped(mind, MUSES_PER_TURN)) want(mind, 'muse')
+}
+
+// Waiting on helpers is when the face has least to do, so it talks more often.
+function wantWait(mind: Mind, now: number) {
+  const { writer } = mind
+  if (!mind.hasQuips || mind.helpers.length === 0 || writer.waits >= capped(mind, WAIT_CAPTIONS)) return
+  const freeAt = Math.max(writer.lastShownAt, mind.waitStartedAt) + spaced(mind, WAIT_GAP_MS)
+  // A muse on screen runs its full length first.
+  if (now < freeAt || (mind.task !== undefined && now < mind.task.until)) return
+  const isMuseTurn = (writer.waits + 1) % MUSE_EVERY_WAITS === 0 && writer.muses < capped(mind, MUSES_PER_TURN)
+  want(mind, isMuseTurn ? 'muse' : 'wait')
+}
+
+// The main loop's running subagents, from the engine's list of agents.
+async function syncHelpers($: EngineInterface, mind: Mind) {
+  const agents = await $.agent.list()
+  const helpers = agents
+    .filter(agent => agent.parentId === undefined && (agent.status === 'running' || agent.status === 'pending'))
+    .map(agent => ({ id: agent.id, task: agent.description }))
+  const now = await $.clock.now()
+  if (mind.helpers.length === 0 && helpers.length > 0) {
+    mind.waitStartedAt = now
+    mind.writer.waits = 0
+    mind.helperActivity = []
+  }
+  const back = mind.helpers.filter(before => !helpers.some(helper => helper.id === before.id))
+  if (back.length > 0) {
+    mind.lastActiveAt = now
+    if (helpers.length > 0) mind.task = { note: `${clip(back[0]!.task, 24)}: done`, until: now + REACTION_MS }
+  }
+  mind.helpers = helpers
+}
+
+function noteHelperCall(mind: Mind, agentId: string, tool: string, input: Record<string, unknown>) {
+  const helper = mind.helpers.find(h => h.id === agentId)
+  if (helper === undefined) return
+  const doing = plain(describe(tool, input))
+  mind.helperActivity.push(mind.helpers.length > 1 ? `${clip(helper.task, 16)}: ${doing}` : doing)
+  mind.helperActivity.splice(0, mind.helperActivity.length - REMEMBERED_ACTIVITY)
 }
 
 const rounded = ({ cheer, energy }: Temperament): Temperament => ({
@@ -584,6 +678,7 @@ async function tick($: EngineInterface, mind: Mind) {
     mind.noteSeed += 1
   }
   wantMuse(mind, now)
+  wantWait(mind, now)
   void writeCaption($, mind, now).catch(() => undefined)
   const look = LOOKS[mood]
   const frame = Math.floor((now - mind.moodStartedAt) / (look.frameMs ?? DEFAULT_FRAME_MS))
@@ -674,10 +769,14 @@ export const register: Register = on => {
     task: undefined,
     repeats: new Map(),
     hasQuips: true,
+    quipLevel: 'normal',
     personality: 'default',
     taskText: '',
     activity: [],
     captions: [],
+    helpers: [],
+    helperActivity: [],
+    waitStartedAt: 0,
     writer: {
       pending: undefined,
       isWriting: false,
@@ -685,6 +784,7 @@ export const register: Register = on => {
       lastShownAt: 0,
       promptSerial: 0,
       muses: 0,
+      waits: 0,
     },
   }
 
@@ -698,17 +798,20 @@ export const register: Register = on => {
     mind.lastTickAt = now
     mind.nextFidgetAt = now + fidgetGap()
     mind.hasQuips = (await $.store.get(STORE.quips)) !== false
+    const quipLevel = await $.store.get(STORE.quipLevel)
+    mind.quipLevel = isQuipLevel(quipLevel) ? quipLevel : 'normal'
     const personality = await $.store.get(STORE.personality)
     mind.personality = isPersonality(personality) ? personality : 'default'
     await saveTemperament($, mind, now)
 
     await $.command.register({
       name: 'face',
-      description: "Claude's face: no argument hides or shows it; corner, band, mood, quips or personality",
-      argumentHint: '[corner | band | mood | quips | personality <name>]',
+      description: "Claude's face: no argument hides or shows it; corner, band, mood, quips [level] or personality",
+      argumentHint: '[corner | band | mood | quips [off | rare | normal | chatty] | personality <name>]',
     })
     $.clock.every(TICK_MS, () => void tick($, mind))
     $.clock.every(PANE_SYNC_MS, () => void syncPane($))
+    $.clock.every(HELPER_SYNC_MS, () => void syncHelpers($, mind).catch(() => undefined))
     if (((await $.store.get(STORE.placement)) ?? 'corner') === 'corner') await openCorner($)
 
     return next(e)
@@ -744,13 +847,22 @@ export const register: Register = on => {
       }
     }
 
-    if (arg === 'quips') {
-      mind.hasQuips = !mind.hasQuips
+    if (arg === 'quips' || arg.startsWith('quips ')) {
+      const wanted = arg.slice('quips'.length).trim()
+      if (wanted !== '' && wanted !== 'off' && wanted !== 'on' && !isQuipLevel(wanted)) {
+        return { text: `No quip level "${wanted}". Choose off, rare, normal or chatty.` }
+      }
+      // No level toggles them, coming back on at the last level chosen.
+      mind.hasQuips = wanted === '' ? !mind.hasQuips : wanted !== 'off'
+      if (isQuipLevel(wanted)) {
+        mind.quipLevel = wanted
+        await $.store.set(STORE.quipLevel, wanted)
+      }
       await $.store.set(STORE.quips, mind.hasQuips)
 
       return {
         text: mind.hasQuips
-          ? 'Quips on: Haiku writes the captions in the current personality.'
+          ? `Quips on, ${mind.quipLevel}: Haiku writes the captions in the current personality.`
           : 'Quips off: captions say what Claude is doing, with no model calls.',
       }
     }
@@ -823,7 +935,7 @@ export const register: Register = on => {
       // As with the reaction below, a failed clock read only costs the zinger.
       const now = await $.clock.now().catch(() => undefined)
       if (now !== undefined) noteToolCall(mind, e.tool, e as unknown as Record<string, unknown>, now)
-    }
+    } else noteHelperCall(mind, e.agentId, e.tool, e as unknown as Record<string, unknown>)
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError === true) {
       mind.errors += 1

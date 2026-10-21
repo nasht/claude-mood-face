@@ -39,6 +39,12 @@ const PALETTE: Record<string, number> = {
   Y: 0xf5d76e, // sparkle
   g: 0xe0b040, // gold
   G: 0x4a4f57, // rivet
+  A: 0xff6a2a, // cigarette ember
+  S: 0xa8a8a8, // smoke
+  T: 0x2fa8a0, // headband
+  F: 0xf2a0c8, // flower petal
+  C: 0x6b5a45, // flat cap
+  c: 0x8a7658, // flat cap tweed
 }
 const TERMINAL_DEFAULT = 0x01000000
 
@@ -148,6 +154,20 @@ const ACCESSORIES: Partial<Record<Personality, Patch[]>> = {
   aesop: [
     { at: { x: 1, y: 0 }, rows: ['LlLlLlLlLlLl'] },
     { at: { x: 0, y: 1 }, rows: ['L............L'] },
+  ],
+  // A cigarette in the corner of the mouth, smoke curling off it.
+  bukowski: [
+    { at: { x: 9, y: 6 }, rows: ['WWWWA'] },
+    { at: { x: 14, y: 3 }, rows: ['.S', 'S.', '.S'] },
+  ],
+  hippie: [
+    { at: { x: 0, y: 1 }, rows: ['TTTTTTTTTTTTTT'] },
+    { at: { x: 12, y: 0 }, rows: ['.F.', 'FYF', '.F.'] },
+  ],
+  // A flat cap, its peak jutting out over the right.
+  geezer: [
+    { at: { x: 1, y: 0 }, rows: ['CcCcCcCcCcCc'] },
+    { at: { x: 0, y: 1 }, rows: ['CCCCCCCCCCCCCCCC'] },
   ],
 }
 

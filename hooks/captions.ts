@@ -4,8 +4,8 @@ import type { Personality } from '../types'
 import { VOICES } from './personalities'
 
 // What a caption is about: the task just asked for, the tool call under way,
-// a long wait, or taking on a new personality.
-export type CaptionKind = 'task' | 'activity' | 'muse' | 'hello'
+// helper agents being waited on, a long wait, or taking on a new personality.
+export type CaptionKind = 'task' | 'activity' | 'wait' | 'muse' | 'hello'
 
 export type CaptionContext = {
   kind: CaptionKind
@@ -13,6 +13,10 @@ export type CaptionContext = {
   task: string
   // Plain descriptions of this turn's tool calls, newest last.
   activity: string[]
+  // The helper agents being waited on, and what they have done lately, newest last.
+  helpers: string[]
+  helperActivity: string[]
+  waitMs: number
   mood: string
   turnMs: number
   errors: number
@@ -29,6 +33,7 @@ const SHORT_CHARS = 60
 const ASK: Record<Exclude<CaptionKind, 'muse'>, string> = {
   task: 'a quip about the task they just asked for, at most 8 words',
   activity: 'a zinger about what Claude is doing right now, at most 8 words',
+  wait: "a zinger about what the helper agents are up to while Claude waits on them, at most 8 words",
   hello: 'a hello in this voice, at most 8 words, as Claude takes on this personality',
 }
 
@@ -49,9 +54,14 @@ function prompt(c: CaptionContext): string {
     c.task === '' ? undefined : `Task the person asked for: """${c.task.slice(0, TASK_CHARS)}"""`,
     c.kind === 'activity' && now !== undefined ? `Right now: ${now}` : undefined,
     earlier.length > 0 ? `Earlier this turn: ${earlier.join('; ')}` : undefined,
+    c.helpers.length > 0 ? `Claude has waited ${minutes(c.waitMs)} on helper agents doing: ${c.helpers.join('; ')}` : undefined,
+    c.helpers.length > 0 && c.helperActivity.length > 0
+      ? `What the helpers did lately: ${c.helperActivity.join('; ')}`
+      : undefined,
     c.kind === 'hello'
       ? undefined
-      : `Mood: ${c.mood}; the turn has run ${minutes(c.turnMs)}; ${c.errors} tool calls failed; feeling ${c.feeling}`,
+      : `Mood: ${c.mood}; ${c.turnMs > 0 ? `the turn has run ${minutes(c.turnMs)}; ` : ''}` +
+        `${c.errors} tool calls failed; feeling ${c.feeling}`,
     c.said.length > 0 ? `Already said, so do not repeat or echo: ${c.said.join(' | ')}` : undefined,
     `Write: ${c.kind === 'muse' ? VOICES[c.personality].muse.ask : ASK[c.kind]}`,
   ]
