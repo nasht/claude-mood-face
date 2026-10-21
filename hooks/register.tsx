@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Extra, Eye, Frame, Mouth, Personality, Shown, Temperament } from '../types'
-import { type CaptionKind, captionRequest, minutes } from './captions'
+import { type CaptionKind, captionRequest, isPastime, minutes } from './captions'
 import { PERSONALITIES, VOICES, findPersonality, isPersonality } from './personalities'
 import { FACE_COLUMNS, FACE_ROWS, frameCells } from './pixels'
 import { cleanReply, clip, describe, plain, target } from './zingers'
@@ -20,8 +20,11 @@ type Mood =
   | 'yawn'
   | 'thinking'
   | 'working'
+  | 'focused'
+  | 'straining'
   | 'waiting'
   | 'sweating'
+  | 'weary'
   | 'melting'
   | 'eyeroll'
   | 'wave'
@@ -121,6 +124,17 @@ const LOOKS: Record<Mood, Look> = {
     frames: [f('(•̀_•́ )', 'down', 'flat'), f('(•̀_•́ )ง', 'down', 'neutral')],
     color: CLAUDE_ORANGE,
   },
+  focused: {
+    // Head down over the work, blinking now and then.
+    frames: [...times(f('( •_•)', 'down', 'flat'), 7), f('( -_-)', 'closed', 'flat')],
+    frameMs: 400,
+    color: CLAUDE_ORANGE,
+  },
+  straining: {
+    frames: [f('ᕦ(•̀_•́)ᕤ', 'angry', 'teeth'), f('ᕦ(•̀_•́ )ᕤ', 'down', 'flat')],
+    frameMs: 500,
+    color: CLAUDE_ORANGE,
+  },
   waiting: {
     // Looks about and drums its fingers while the helper agents work.
     frames: [
@@ -142,6 +156,12 @@ const LOOKS: Record<Mood, Look> = {
     ],
     frameMs: 400,
     color: 'yellow',
+  },
+  weary: {
+    frames: [...times(f('(=_=;)', 'half', 'wavy', 'sweatLow'), 5), f('(-_-;)', 'closed', 'wavy', 'sweatLow')],
+    frameMs: 500,
+    color: 'gray',
+    body: SLEEPY_ORANGE,
   },
   melting: {
     frames: [
@@ -225,10 +245,14 @@ const PANE_SYNC_MS = 1_000
 const HELPER_SYNC_MS = 1_000
 const DEFAULT_FRAME_MS = 600
 const MIN_NOTE_COLUMNS = 12
+// A long turn wears the face down by stages.
 const THINKING_UNTIL_MS = 20_000
-const SWEAT_AFTER_MS = 90_000
-const MELT_AFTER_MS = 240_000
-const SLEEP_AFTER_MS = 10 * 60_000
+const FOCUS_AFTER_MS = 60_000
+const STRAIN_AFTER_MS = 3 * 60_000
+const SWEAT_AFTER_MS = 5 * 60_000
+const WEARY_AFTER_MS = 15 * 60_000
+const MELT_AFTER_MS = 30 * 60_000
+const SLEEP_AFTER_MS = 3 * 60_000
 const REACTION_MS = 5_000
 const GREETING_MS = 6_000
 const ERROR_FLASH_MS = 3_500
@@ -243,8 +267,11 @@ const REMEMBERED_PROMPTS = 20
 const GREETING_PREFIX_CHARS = 30
 const QUOTED_PROMPT_CHARS = 120
 const PROGRESS_MOMENTS: Partial<Record<Mood, string>> = {
-  sweating: 'the turn has dragged on past a minute and a half',
-  melting: 'the turn has run past four minutes and shows no sign of ending',
+  focused: 'a minute in, Claude has settled down to concentrate',
+  straining: 'three minutes in, the work has turned into real effort',
+  sweating: 'the turn has dragged on past five minutes',
+  weary: 'a quarter of an hour in, Claude is wearing out',
+  melting: 'the turn has run past half an hour and shows no sign of ending',
 }
 
 // Captions about the task, written by a small model in the personality's voice.
@@ -550,7 +577,10 @@ function moodAt(mind: Mind, now: number): { mood: Mood; note?: string } {
   }
   const elapsed = now - mind.turnStartedAt
   if (elapsed > MELT_AFTER_MS) return { mood: 'melting', note }
+  if (elapsed > WEARY_AFTER_MS) return { mood: 'weary', note }
   if (elapsed > SWEAT_AFTER_MS) return { mood: 'sweating', note }
+  if (elapsed > STRAIN_AFTER_MS) return { mood: 'straining', note }
+  if (elapsed > FOCUS_AFTER_MS) return { mood: 'focused', note }
   if (elapsed > THINKING_UNTIL_MS) return { mood: 'working', note }
 
   return { mood: 'thinking', note }
@@ -577,7 +607,7 @@ function noteToolCall(mind: Mind, tool: string, input: Record<string, unknown>, 
   }
 }
 
-function showCaption(mind: Mind, kind: CaptionKind, note: string, now: number) {
+function showCaption(mind: Mind, kind: CaptionKind, note: string, isLong: boolean, now: number) {
   mind.captions.push(note)
   mind.captions.splice(0, mind.captions.length - REMEMBERED_CAPTIONS)
   mind.writer.lastShownAt = now
@@ -586,7 +616,7 @@ function showCaption(mind: Mind, kind: CaptionKind, note: string, now: number) {
   // A reaction's line keeps its face on screen long enough to read.
   else if (kind === 'mood' && flash !== undefined && flash.mood === mind.moment?.mood) {
     mind.flash = { ...flash, note, until: Math.max(flash.until, now + REACTION_MS) }
-  } else mind.task = { note, until: now + (kind === 'muse' ? MUSE_NOTE_MS : kind === 'idle' ? IDLE_NOTE_MS : CAPTION_NOTE_MS) }
+  } else mind.task = { note, until: now + (isLong ? MUSE_NOTE_MS : kind === 'idle' ? IDLE_NOTE_MS : CAPTION_NOTE_MS) }
 }
 
 // Writes the waiting caption, one model call at a time and no more often than the gap.
@@ -612,6 +642,7 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
   const serial = writer.promptSerial
   const { moment } = mind
   const mood = kind === 'mood' && moment !== undefined ? moment.mood : (mind.lastMood ?? 'idle')
+  const isLong = kind === 'muse' || isPastime(kind, mind.personality, mind.helpers.length)
 
   try {
     const { request, maxChars } = captionRequest({
@@ -632,11 +663,11 @@ async function writeCaption($: EngineInterface, mind: Mind, now: number) {
       said: mind.captions,
     })
     const reply = await $.model.complete(request)
-    const note = reply.isAnswered ? cleanReply(reply.text, maxChars, kind !== 'muse') : undefined
+    const note = reply.isAnswered ? cleanReply(reply.text, maxChars, !isLong) : undefined
     // A newer reaction replaces one still being written.
     const isStale =
       kind !== 'hello' && (serial !== writer.promptSerial || isOver() || (kind === 'mood' && mind.moment !== moment))
-    if (note !== undefined && !isStale) showCaption(mind, kind, note, await $.clock.now())
+    if (note !== undefined && !isStale) showCaption(mind, kind, note, isLong, await $.clock.now())
   } finally {
     writer.isWriting = false
   }
@@ -1047,15 +1078,18 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A draft in the box means they're typing, so the idle remarks hold off.
+  // A draft in the box means they're typing, so the idle remarks hold off;
+  // typing also keeps the face awake.
   on('prompt.edit', async ($, e, next) => {
     mind.isTyping = (e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end)).trim() !== ''
+    mind.lastActiveAt = await $.clock.now()
 
     return next(e)
   })
 
   on('prompt.change', async ($, e, next) => {
     mind.isTyping = e.text.trim() !== ''
+    mind.lastActiveAt = await $.clock.now()
 
     return next(e)
   })

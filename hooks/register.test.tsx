@@ -73,11 +73,17 @@ test('with quips off, a repeated prompt gets an eye roll and a plain note', asyn
   expect(await faceText($)).toContain('you asked that already')
 })
 
-test('a long turn sweats, then three failures flip the table', async ($, on) => {
+test('a long turn wears the face down by stages, then three failures flip the table', async ($, on) => {
   const clock = await start($, on)
   await $.turn.start({ text: 'refactor everything', turnId: 't1' })
   await clock.advance(100_000)
+  expect(await faceText($)).toMatch(/\( [•-]_[•-]\)/)
+  await clock.advance(100_000)
+  expect(await faceText($)).toContain('ᕦ(')
+  await clock.advance(120_000)
   expect(await faceText($)).toContain(';)')
+  await clock.advance(10 * 60_000)
+  expect(await faceText($)).toMatch(/\([=-]_[=-];\)/)
 
   for (let i = 0; i < 3; i += 1) await $.tool.call({ tool: 'Bash', command: 'false' })
   await clock.advance(700)
@@ -303,9 +309,9 @@ test('a long turn starting to sweat gets a line about it', async ($, on) => {
   const asked: Asked[] = []
   const clock = await start($, on, { isToolOk: true, asked })
   await $.turn.start({ text: 'migrate everything', turnId: 't1' })
-  await clock.advance(91_000)
+  await clock.advance(301_000)
 
-  expect(asked.some(a => a.prompt.includes('dragged on past a minute and a half'))).toBe(true)
+  expect(asked.some(a => a.prompt.includes('dragged on past five minutes'))).toBe(true)
 })
 
 test('a long quiet turn gets a fable from Aesop', async ($, on) => {
@@ -420,4 +426,63 @@ test('an idle prompt after a task gets a few remarks, and typing holds them off'
   await $.prompt.edit({ origin: { kind: 'composer' }, text: 'n', cursor: 1, start: 0, end: 1, inputText: '' })
   await clock.advance(300_000)
   expect(asked).toHaveLength(afterTurn + 3)
+})
+
+test('an idle prompt falls asleep after a few minutes, and the quips stop', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked })
+  await $.prompt.submit({ text: 'tidy up the pixel art' })
+  await $.turn.start({ text: 'tidy up the pixel art', turnId: 't1' })
+  await clock.advance(500)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 500, isAborted: false })
+  await clock.advance(181_000)
+  expect(await faceText($)).toContain('(－_－) z')
+
+  const asleep = asked.length
+  await clock.advance(600_000)
+  expect(asked).toHaveLength(asleep)
+})
+
+test('a subagent still running after the turn keeps the face awake and talking', async ($, on) => {
+  const asked: Asked[] = []
+  const agents: AgentInfo[] = []
+  const clock = await start($, on, { isToolOk: true, asked, agents })
+  await $.turn.start({ text: 'review the face', turnId: 't1' })
+  await clock.advance(500)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 500, isAborted: false })
+  agents.push(HELPER)
+  await clock.advance(200_000)
+  const during = asked.length
+  await clock.advance(60_000)
+
+  expect(await faceText($)).not.toContain('z')
+  expect(asked.length).toBeGreaterThan(during)
+})
+
+test('aesop passes an idle prompt with a real fable, leaving the task out', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked, caption: 'A fox could not reach the grapes. Moral: sour grapes.' })
+  await $.command.run({ command: 'face', args: 'personality aesop' })
+  await $.prompt.submit({ text: 'migrate the database' })
+  await $.turn.start({ text: 'migrate the database', turnId: 't1' })
+  await clock.advance(500)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 500, isAborted: false })
+  await clock.advance(21_000)
+
+  expect(asked.at(-1)?.prompt).toContain("Aesop's fable \"")
+  expect(asked.at(-1)?.prompt).not.toContain('migrate the database')
+  expect(await faceText($)).toContain('Moral: sour grapes')
+})
+
+test('a voice without a pastime still talks about the task while idle', async ($, on) => {
+  const asked: Asked[] = []
+  const clock = await start($, on, { isToolOk: true, asked })
+  await $.command.run({ command: 'face', args: 'personality pirate' })
+  await $.prompt.submit({ text: 'migrate the database' })
+  await $.turn.start({ text: 'migrate the database', turnId: 't1' })
+  await clock.advance(500)
+  await $.turn.complete({ turnId: 't1', reason: 'answer', answer: '', durationMs: 500, isAborted: false })
+  await clock.advance(21_000)
+
+  expect(asked.at(-1)?.prompt).toContain('migrate the database')
 })

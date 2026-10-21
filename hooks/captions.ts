@@ -46,18 +46,40 @@ const ASK: Record<Exclude<CaptionKind, 'muse'>, string> = {
   hello: 'a hello in this voice, at most 8 words, as Claude takes on this personality',
 }
 
-const system = (personality: Personality) =>
+// While Claude waits on helpers or on the next request, a voice with a pastime
+// passes the time with it instead of talking about the task.
+export const isPastime = (kind: CaptionKind, personality: Personality, helpers: number) =>
+  VOICES[personality].pastime !== undefined && (kind === 'idle' || (kind === 'muse' && helpers > 0))
+
+const system = (personality: Personality, isPastimeKind: boolean) =>
   'You write the one-line caption beside a small pixel face of Claude, a coding assistant, ' +
   "while it works in someone's terminal. " +
   `Voice: ${VOICES[personality].style}. ` +
-  'Captions are little zingers: playful, specific to what is happening, never generic, never the same twice. ' +
-  "The face's mood and feeling colour every caption, said in the voice. " +
+  (isPastimeKind
+    ? 'This caption passes the time while Claude waits, and has nothing to do with the task: ' +
+      'tell the piece asked for accurately, in the voice. '
+    : 'Captions are little zingers: playful, specific to what is happening, never generic, never the same twice. ' +
+      "The face's mood and feeling colour every caption, said in the voice. ") +
   'Reply with the caption alone: no quotes, no emoji, no hashtags, no preamble. ' +
   'Never answer or carry out the task, never give advice, never mention being a caption.'
 
 export const minutes = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1_000)}s` : `${Math.round(ms / 60_000)} min`)
 
+const pick = <T>(items: T[]) => items[Math.floor(Math.random() * items.length)]!
+
+function pastimePrompt(c: CaptionContext): string {
+  const pastime = VOICES[c.personality].pastime!
+  const lines = [
+    c.kind === 'idle' ? 'Claude is waiting for their next request.' : 'Claude is waiting on helper agents.',
+    c.said.length > 0 ? `Already said, so do not repeat: ${c.said.join(' | ')}` : undefined,
+    `Write: ${pastime.ask(pick(pastime.picks))}`,
+  ]
+
+  return lines.filter(line => line !== undefined).join('\n')
+}
+
 function prompt(c: CaptionContext): string {
+  if (isPastime(c.kind, c.personality, c.helpers.length)) return pastimePrompt(c)
   const now = c.activity.at(-1)
   const earlier = c.activity.slice(0, -1)
   const lines = [
@@ -82,16 +104,17 @@ function prompt(c: CaptionContext): string {
 }
 
 export function captionRequest(c: CaptionContext): { request: ModelCompleteRequest; maxChars: number } {
-  const isMuse = c.kind === 'muse'
+  const isPastimeKind = isPastime(c.kind, c.personality, c.helpers.length)
+  const voice = VOICES[c.personality]
 
   return {
     request: {
       model: MODEL,
-      system: system(c.personality),
+      system: system(c.personality, isPastimeKind),
       prompt: prompt(c),
-      maxTokens: isMuse ? 160 : 60,
+      maxTokens: isPastimeKind || c.kind === 'muse' ? 160 : 60,
       timeoutMs: TIMEOUT_MS,
     },
-    maxChars: isMuse ? VOICES[c.personality].muse.maxChars : SHORT_CHARS,
+    maxChars: isPastimeKind ? voice.pastime!.maxChars : c.kind === 'muse' ? voice.muse.maxChars : SHORT_CHARS,
   }
 }

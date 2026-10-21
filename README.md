@@ -1,10 +1,10 @@
 # mood-face
 
-A Claude Code mod that adds a small pixel face to your session. It reacts to the conversation: it waves when you say hello, blushes when you say thanks, rolls its eyes when you repeat a question, sweats through long turns, flips the table after three failed tool calls, and falls asleep when you leave it alone.
+A Claude Code mod that adds a small pixel face to your session. It reacts to the conversation: it waves when you say hello, blushes when you say thanks, rolls its eyes when you repeat a question, settles in, strains, sweats and wears out as a long turn drags on (focused after a minute, straining at three, sweating at five, weary at fifteen, melting at thirty), flips the table after three failed tool calls, and falls asleep after three quiet minutes with nothing running.
 
-While Claude works, the caption makes little jokes about the task. Haiku writes each one from the task you asked for, what Claude is doing right now (editing `app.ts` for the third time, running the tests), how the turn is going and the last few captions, so it doesn't repeat itself. Long, quiet stretches get something longer, such as an idea from the philosopher or a fable from Aesop. Emotions take over when they apply: a failed tool gets a glare, and a line about it in character.
+While Claude works, the caption makes little jokes about the task. Haiku writes each one from the task you asked for, what Claude is doing right now (editing `app.ts` for the third time, running the tests), how the turn is going and the last few captions, so it doesn't repeat itself. Long, quiet stretches get something longer, such as a philosopher's idea or one of Aesop's fables that fits the task. While Claude waits on subagents or on your next request, `aesop`, `philosopher`, `zen` and `bard` pass the time with a real fable, a real philosophical idea, a traditional koan or a line of Shakespeare, picked at random and unrelated to the task. Emotions take over when they apply: a failed tool gets a glare, and a line about it in character.
 
-The captions cost one small model call at most every 3 seconds during a turn, with up to 10 long-wait pieces per turn. While Claude waits on subagents, the face looks about, shows what they are doing, and gets a caption about their work every 12 seconds or so (up to 30 per wait, every fourth one a long-wait piece). After a turn ends, the idle prompt gets up to three remarks about what was just done, the first after 20 seconds and then a minute apart; they hold off while there's a draft in the prompt box and stop once the face falls asleep. Reactions get a line too: an eye roll, a failed tool, a table flip, a thank-you or a hello each gets one call, the line written in the personality's voice and in the face's mood. `/face quips rare` halves how often captions come and `/face quips chatty` doubles it; `/face quips normal` restores the times above. `/face quips off` (or `/face quips` alone, which toggles) turns the model calls off, and the caption then says what Claude is doing in plain words.
+The captions cost one small model call at most every 3 seconds during a turn, with up to 10 long-wait pieces per turn. While Claude waits on subagents, the face looks about, shows what they are doing, and gets a caption about their work every 12 seconds or so (up to 30 per wait, every fourth one a long-wait piece). After a turn ends, the idle prompt gets up to three remarks about what was just done, the first after 20 seconds and then a minute apart; they hold off while there's a draft in the prompt box and stop once the face falls asleep. Typing keeps it awake, and so does a subagent still running. Reactions get a line too: an eye roll, a failed tool, a table flip, a thank-you or a hello each gets one call, the line written in the personality's voice and in the face's mood. `/face quips rare` halves how often captions come and `/face quips chatty` doubles it; `/face quips normal` restores the times above. `/face quips off` (or `/face quips` alone, which toggles) turns the model calls off, and the caption then says what Claude is doing in plain words.
 
 ## Personalities
 
@@ -19,10 +19,10 @@ The captions cost one small model call at most every 3 seconds during a turn, wi
 | `noir` | a hard-boiled detective | a fedora |
 | `narrator` | a hushed nature documentary | a pith helmet |
 | `pirate` | a pirate captain | a bandana and eyepatch |
-| `bard` | a melodramatic Shakespearean actor | a feathered beret |
-| `zen` | a zen monk; long waits get koans | a gold dot |
-| `philosopher` | a philosopher; long waits get ideas | a beard |
-| `aesop` | a teller of fables; long waits get fables | a laurel wreath |
+| `bard` | a melodramatic Shakespearean actor; waits get lines of Shakespeare | a feathered beret |
+| `zen` | a zen monk; long waits get koans, and waits for subagents or input get traditional ones | a gold dot |
+| `philosopher` | a philosopher; long waits get real philosophers' ideas | a beard |
+| `aesop` | a teller of fables; long waits get Aesop's fables | a laurel wreath |
 | `bukowski` | a gruff barfly poet; long waits get free verse | a cigarette |
 | `hippie` | a laid-back hippie; long waits get cosmic thoughts | a headband and flower |
 | `geezer` | a fast-talking London geezer | a flat cap |
