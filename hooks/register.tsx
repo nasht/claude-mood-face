@@ -1,8 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Extra, Eye, Frame, Mouth, Shown, Temperament } from '../types'
+import type { Extra, Eye, Frame, Mouth, Personality, Shown, Temperament } from '../types'
+import { type CaptionKind, captionRequest } from './captions'
+import { PERSONALITIES, VOICES, findPersonality, isPersonality } from './personalities'
 import { FACE_COLUMNS, FACE_ROWS, frameCells } from './pixels'
+import { cleanReply, describe, plain, target } from './zingers'
 
 // Each mood is a frame sequence, a caption colour, a body colour and the captions
 // it picks from. A sequence loops unless `isOnce`, which plays it once and holds
@@ -250,6 +253,19 @@ const REPEAT_MIN_WORDS = 3
 const REMEMBERED_PROMPTS = 20
 const GREETING_PREFIX_CHARS = 30
 
+// Captions about the task, written by a small model in the personality's voice.
+const CAPTION_NOTE_MS = 8_000
+const MUSE_NOTE_MS = 20_000
+const CAPTION_GAP_MS = 3_000 // at most one model call this often
+const MUSE_AFTER_MS = 45_000 // a turn this long, quiet this long, gets an idea or fable
+const MUSES_PER_TURN = 10
+const REMEMBERED_CAPTIONS = 8
+const REMEMBERED_ACTIVITY = 5
+const REPEATS_BEFORE_COUNTING = 2
+const TASK_MIN_WORDS = 3
+// A higher kind waiting to be written isn't replaced by a lower one.
+const CAPTION_RANK: Record<CaptionKind, number> = { muse: 0, activity: 1, task: 2, hello: 3 }
+
 // Idle fidgets: a glance, hum or yawn now and then.
 const FIDGET_MIN_GAP_MS = 20_000
 const FIDGET_MAX_GAP_MS = 45_000
@@ -289,16 +305,24 @@ const PANE = 'mood-face'
 const PANE_COLUMNS = 22
 const METER_CELLS = 5
 
-const STORE = { temperament: 'temperament', lastSeenAt: 'lastSeenAt', placement: 'placement' } as const
+const STORE = { temperament: 'temperament', lastSeenAt: 'lastSeenAt', placement: 'placement', quips: 'quips', personality: 'personality' } as const
 type Placement = 'corner' | 'band'
 
 const NEUTRAL: Temperament = { cheer: 0, energy: 1 }
-const IDLE: Shown = { frame: IDLE_FRAME, note: '', color: CLAUDE_ORANGE, body: CLAUDE_ORANGE, temperament: NEUTRAL }
+const IDLE: Shown = {
+  frame: IDLE_FRAME,
+  note: '',
+  color: CLAUDE_ORANGE,
+  body: CLAUDE_ORANGE,
+  temperament: NEUTRAL,
+  personality: 'default',
+}
 const shown = atom({ plugin: 'mood-face', key: 'shown' } as const, IDLE)
 const isHidden = atom({ plugin: 'mood-face', key: 'isHidden' } as const, false)
 const isPaneShown = atom({ plugin: 'mood-face', key: 'isPaneShown' } as const, false)
 
 type Flash = { mood: Mood; note?: string; until: number }
+type TaskNote = { note: string; until: number }
 
 const words = (text: string) =>
   text
@@ -340,6 +364,24 @@ type Mind = {
   lastTickAt: number
   lastSavedAt: number
   nextFidgetAt: number
+  task: TaskNote | undefined
+  repeats: Map<string, number>
+  hasQuips: boolean
+  personality: Personality
+  taskText: string
+  activity: string[]
+  captions: string[]
+  writer: Writer
+}
+
+type Writer = {
+  pending: CaptionKind | undefined
+  isWriting: boolean
+  lastAskedAt: number
+  lastShownAt: number
+  // Bumped by each new prompt, so a reply about the previous task is dropped.
+  promptSerial: number
+  muses: number
 }
 
 const clamp = (value: number, low: number, high: number) => Math.min(high, Math.max(low, value))
@@ -437,12 +479,83 @@ function restingMood(mind: Mind, now: number): { mood: Mood; note?: string } {
 function moodAt(mind: Mind, now: number): { mood: Mood; note?: string } {
   if (mind.flash !== undefined && now < mind.flash.until) return mind.flash
   if (mind.turnId === undefined) return restingMood(mind, now)
+  // A fresh zinger about the task wins; once it lapses the mood's own notes return.
+  const note = mind.task !== undefined && now < mind.task.until ? mind.task.note : undefined
   const elapsed = now - mind.turnStartedAt
-  if (elapsed > MELT_AFTER_MS) return { mood: 'melting' }
-  if (elapsed > SWEAT_AFTER_MS) return { mood: 'sweating' }
-  if (elapsed > THINKING_UNTIL_MS) return { mood: 'working' }
+  if (elapsed > MELT_AFTER_MS) return { mood: 'melting', note }
+  if (elapsed > SWEAT_AFTER_MS) return { mood: 'sweating', note }
+  if (elapsed > THINKING_UNTIL_MS) return { mood: 'working', note }
 
-  return { mood: 'thinking' }
+  return { mood: 'thinking', note }
+}
+
+function want(mind: Mind, kind: CaptionKind) {
+  const { pending } = mind.writer
+  if (pending === undefined || CAPTION_RANK[kind] >= CAPTION_RANK[pending]) mind.writer.pending = kind
+}
+
+function noteToolCall(mind: Mind, tool: string, input: Record<string, unknown>, now: number) {
+  const key = target(tool, input)
+  const count = key === undefined ? 0 : (mind.repeats.get(key) ?? 0) + 1
+  if (key !== undefined) mind.repeats.set(key, count)
+  const doing = plain({ ...describe(tool, input), n: count >= REPEATS_BEFORE_COUNTING ? count : undefined })
+  mind.activity.push(doing)
+  mind.activity.splice(0, mind.activity.length - REMEMBERED_ACTIVITY)
+  // Without the model, the plain description is the caption.
+  if (mind.hasQuips) want(mind, 'activity')
+  else mind.task = { note: doing, until: now + CAPTION_NOTE_MS }
+}
+
+function showCaption(mind: Mind, kind: CaptionKind, note: string, now: number) {
+  mind.captions.push(note)
+  mind.captions.splice(0, mind.captions.length - REMEMBERED_CAPTIONS)
+  mind.writer.lastShownAt = now
+  if (kind === 'hello') mind.flash = { mood: 'wave', note, until: now + GREETING_MS }
+  else mind.task = { note, until: now + (kind === 'muse' ? MUSE_NOTE_MS : CAPTION_NOTE_MS) }
+}
+
+// Writes the waiting caption, one model call at a time and no more often than the gap.
+async function writeCaption($: EngineInterface, mind: Mind, now: number) {
+  const { writer } = mind
+  const kind = writer.pending
+  if (kind === undefined || writer.isWriting || now - writer.lastAskedAt < CAPTION_GAP_MS) return
+  if (kind !== 'hello' && kind !== 'task' && mind.turnId === undefined) {
+    writer.pending = undefined
+    return
+  }
+  writer.pending = undefined
+  writer.isWriting = true
+  writer.lastAskedAt = now
+  if (kind === 'muse') writer.muses += 1
+  const serial = writer.promptSerial
+  const mood = mind.lastMood ?? 'idle'
+
+  try {
+    const { request, maxChars } = captionRequest({
+      kind,
+      personality: mind.personality,
+      task: mind.taskText,
+      activity: mind.activity,
+      mood,
+      turnMs: mind.turnId === undefined ? 0 : now - mind.turnStartedAt,
+      errors: mind.errors,
+      feeling: feeling(mind.temperament),
+      said: mind.captions,
+    })
+    const reply = await $.model.complete(request)
+    const note = reply.isAnswered ? cleanReply(reply.text, maxChars, kind !== 'muse') : undefined
+    const isStale = kind !== 'hello' && (serial !== writer.promptSerial || (kind !== 'task' && mind.turnId === undefined))
+    if (note !== undefined && !isStale) showCaption(mind, kind, note, await $.clock.now())
+  } finally {
+    writer.isWriting = false
+  }
+}
+
+// A long turn that has gone quiet gets an idea, a fable or a remark, depending on the voice.
+function wantMuse(mind: Mind, now: number) {
+  const { writer } = mind
+  const isQuiet = now - Math.max(writer.lastShownAt, mind.turnStartedAt) >= MUSE_AFTER_MS
+  if (mind.hasQuips && mind.turnId !== undefined && isQuiet && writer.muses < MUSES_PER_TURN) want(mind, 'muse')
 }
 
 const rounded = ({ cheer, energy }: Temperament): Temperament => ({
@@ -465,14 +578,17 @@ async function tick($: EngineInterface, mind: Mind) {
     mind.moodStartedAt = now
     mind.noteSeed += 1
   }
+  wantMuse(mind, now)
+  void writeCaption($, mind, now).catch(() => undefined)
   const look = LOOKS[mood]
   const frame = Math.floor((now - mind.moodStartedAt) / (look.frameMs ?? DEFAULT_FRAME_MS))
   const next: Shown = {
     frame: look.isOnce ? look.frames[Math.min(frame, look.frames.length - 1)]! : pick(look.frames, frame),
     note: note ?? pick(look.notes, mind.noteSeed),
     color: look.color,
-    body: look.body ?? CLAUDE_ORANGE,
+    body: look.body ?? VOICES[mind.personality].body ?? CLAUDE_ORANGE,
     temperament: rounded(mind.temperament),
+    personality: mind.personality,
   }
   // Write only on a visible change, so an unchanged face never redraws.
   await update($, shown, current => (JSON.stringify(current) === JSON.stringify(next) ? current : next))
@@ -524,6 +640,10 @@ const feeling = ({ cheer, energy }: Temperament) =>
         ? 'a bit sulky'
         : 'fine'
 
+// Text faces wear the personality's badge where the pixel face would wear its accessory.
+const withBadge = (face: string, personality: Personality) =>
+  VOICES[personality].badge === '' ? face : `${face} ${VOICES[personality].badge}`
+
 const meter = (fraction: number) => {
   const filled = Math.round(clamp(fraction, 0, 1) * METER_CELLS)
 
@@ -546,6 +666,21 @@ export const register: Register = on => {
     lastTickAt: 0,
     lastSavedAt: 0,
     nextFidgetAt: 0,
+    task: undefined,
+    repeats: new Map(),
+    hasQuips: true,
+    personality: 'default',
+    taskText: '',
+    activity: [],
+    captions: [],
+    writer: {
+      pending: undefined,
+      isWriting: false,
+      lastAskedAt: -Infinity,
+      lastShownAt: 0,
+      promptSerial: 0,
+      muses: 0,
+    },
   }
 
   on('session.start', async ($, e, next) => {
@@ -557,11 +692,15 @@ export const register: Register = on => {
     mind.lastActiveAt = now
     mind.lastTickAt = now
     mind.nextFidgetAt = now + fidgetGap()
+    mind.hasQuips = (await $.store.get(STORE.quips)) !== false
+    const personality = await $.store.get(STORE.personality)
+    mind.personality = isPersonality(personality) ? personality : 'default'
     await saveTemperament($, mind, now)
 
     await $.command.register({
       name: 'face',
-      description: "Claude's face: no argument hides or shows it; corner, band or mood",
+      description: "Claude's face: no argument hides or shows it; corner, band, mood, quips or personality",
+      argumentHint: '[corner | band | mood | quips | personality <name>]',
     })
     $.clock.every(TICK_MS, () => void tick($, mind))
     $.clock.every(PANE_SYNC_MS, () => void syncPane($))
@@ -594,8 +733,38 @@ export const register: Register = on => {
       const { cheer, energy } = mind.temperament
 
       return {
-        text: `Feeling ${feeling(mind.temperament)}. cheer ${meter((cheer + 1) / 2)}  energy ${meter(energy)}`,
+        text:
+          `Feeling ${feeling(mind.temperament)}. cheer ${meter((cheer + 1) / 2)}  energy ${meter(energy)}` +
+          `  personality: ${mind.personality}`,
       }
+    }
+
+    if (arg === 'quips') {
+      mind.hasQuips = !mind.hasQuips
+      await $.store.set(STORE.quips, mind.hasQuips)
+
+      return {
+        text: mind.hasQuips
+          ? 'Quips on: Haiku writes the captions in the current personality.'
+          : 'Quips off: captions say what Claude is doing, with no model calls.',
+      }
+    }
+
+    if (arg === 'personality' || arg.startsWith('personality ')) {
+      const wanted = arg.slice('personality'.length).trim()
+      const listing = PERSONALITIES.map(p => `  ${p.padEnd(12)}${VOICES[p].label}`).join('\n')
+      if (wanted === '') return { text: `Personality: ${mind.personality}. Choose one with /face personality <name>:\n${listing}` }
+      const chosen = findPersonality(wanted)
+      if (chosen === undefined) return { text: `No personality "${wanted}". The choices:\n${listing}` }
+
+      mind.personality = chosen
+      mind.captions = []
+      await $.store.set(STORE.personality, chosen)
+      const now = await $.clock.now()
+      mind.flash = { mood: 'wave', note: `${VOICES[chosen].badge} ${VOICES[chosen].label}`.trim(), until: now + GREETING_MS }
+      if (mind.hasQuips) want(mind, 'hello')
+
+      return { text: `Personality: ${chosen}, ${VOICES[chosen].label}.` }
     }
 
     const wasHidden = await read($, isHidden)
@@ -616,8 +785,16 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     if (e.command === undefined && e.isMeta === undefined) {
       const now = await $.clock.now()
-      mind.flash = react(mind, e.text, now) ?? mind.flash
+      const reaction = react(mind, e.text, now)
+      mind.flash = reaction ?? mind.flash
       mind.lastActiveAt = now
+      mind.task = undefined
+      // Small talk gets its reaction; a real task becomes what the captions are about.
+      if (reaction === undefined && words(e.text).length >= TASK_MIN_WORDS) {
+        mind.taskText = e.text
+        mind.writer.promptSerial += 1
+        if (mind.hasQuips) want(mind, 'task')
+      }
     }
 
     return next(e)
@@ -628,12 +805,20 @@ export const register: Register = on => {
       mind.turnId = e.turnId
       mind.turnStartedAt = await $.clock.now()
       mind.errors = 0
+      mind.repeats.clear()
+      mind.activity = []
+      mind.writer.muses = 0
     }
 
     return next(e)
   })
 
   on('tool.call', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      // As with the reaction below, a failed clock read only costs the zinger.
+      const now = await $.clock.now().catch(() => undefined)
+      if (now !== undefined) noteToolCall(mind, e.tool, e as unknown as Record<string, unknown>, now)
+    }
     const ran = await next(e)
     if (ran.deny === undefined && ran.isError === true) {
       mind.errors += 1
@@ -662,6 +847,7 @@ export const register: Register = on => {
         mind.flash = { mood: 'proud', note, until }
       }
       mind.turnId = undefined
+      mind.task = undefined
       mind.lastActiveAt = now
       mind.nextFidgetAt = now + fidgetGap()
     }
@@ -670,7 +856,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { frame, note, color, body, temperament } = await read($, shown)
+    const { frame, note, color, body, temperament, personality } = await read($, shown)
     const { cheer, energy } = temperament
 
     if (e.surface === 'terminal') {
@@ -678,7 +864,7 @@ export const register: Register = on => {
 
       return (
         <Box flexDirection="column" alignItems="center">
-          <Raster key="face" columns={FACE_COLUMNS} rows={FACE_ROWS} cells={frameCells(frame, hexColor(body))} />
+          <Raster key="face" columns={FACE_COLUMNS} rows={FACE_ROWS} cells={frameCells(frame, hexColor(body), personality)} />
           <Text dimColor>{note === '' ? ' ' : note}</Text>
           <Text dimColor>cheer  {meter((cheer + 1) / 2)}</Text>
           <Text dimColor>energy {meter(energy)}</Text>
@@ -691,7 +877,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Text color={color} weight="bold">
-          {frame.text}
+          {withBadge(frame.text, personality)}
         </Text>
         <Text dimColor>{note}</Text>
       </Box>
@@ -701,7 +887,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || (await read($, isHidden)) || (await read($, isPaneShown))) return next(e)
 
-    const { frame, note, color, body } = await read($, shown)
+    const { frame, note, color, body, personality } = await read($, shown)
     const hasRoom = e.props.maxRows >= FACE_ROWS && e.props.bodyColumns >= FACE_COLUMNS + MIN_NOTE_COLUMNS
 
     if (e.surface === 'terminal' && hasRoom) {
@@ -709,7 +895,7 @@ export const register: Register = on => {
 
       return (
         <Box alignItems="center">
-          <Raster key="face" columns={FACE_COLUMNS} rows={FACE_ROWS} cells={frameCells(frame, hexColor(body))} />
+          <Raster key="face" columns={FACE_COLUMNS} rows={FACE_ROWS} cells={frameCells(frame, hexColor(body), personality)} />
           {note !== '' && <Text dimColor>{note}</Text>}
         </Box>
       )
@@ -721,7 +907,7 @@ export const register: Register = on => {
     return (
       <Box>
         <Text color={color} weight="bold">
-          {frame.text}
+          {withBadge(frame.text, personality)}
         </Text>
         {note !== '' && <Text dimColor>{'  ' + note}</Text>}
       </Box>

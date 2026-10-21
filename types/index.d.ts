@@ -23,7 +23,27 @@ export type Frame = { text: string; eyes: Eye; mouth: Mouth; extras?: Extra[] }
 // How Claude feels over time: cheer from -1 (sulky) to 1 (chipper), energy from 0 to 1.
 export type Temperament = { cheer: number; energy: number }
 
-export type Shown = { frame: Frame; note: string; color: string; body: string; temperament: Temperament }
+export type Personality =
+  | 'default'
+  | 'sardonic'
+  | 'optimist'
+  | 'marvin'
+  | 'noir'
+  | 'narrator'
+  | 'pirate'
+  | 'bard'
+  | 'zen'
+  | 'philosopher'
+  | 'aesop'
+
+export type Shown = {
+  frame: Frame
+  note: string
+  color: string
+  body: string
+  temperament: Temperament
+  personality: Personality
+}
 
 declare module 'claude-code' {
   interface PluginState {

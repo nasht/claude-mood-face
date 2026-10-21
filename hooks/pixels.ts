@@ -1,4 +1,4 @@
-import type { Extra, Eye, Frame, Mouth } from '../types'
+import type { Extra, Eye, Frame, Mouth, Personality } from '../types'
 
 // The face is a 16 x 8 pixel grid drawn as 16 x 4 terminal cells: each cell is a
 // half block whose foreground is the top pixel and background the bottom one.
@@ -29,6 +29,16 @@ const PALETTE: Record<string, number> = {
   P: 0xe88aa0, // blush
   B: 0x9cc8f0, // sweat highlight
   b: 0x4a8fd6, // sweat
+  H: 0x3a3330, // fedora
+  K: 0xc8b27a, // pith helmet
+  R: 0xc8322d, // bandana
+  V: 0x7d4fa8, // beret
+  L: 0x4f8a3c, // laurel
+  l: 0x8cc46a, // laurel highlight
+  E: 0xd9d4cc, // beard
+  Y: 0xf5d76e, // sparkle
+  g: 0xe0b040, // gold
+  G: 0x4a4f57, // rivet
 }
 const TERMINAL_DEFAULT = 0x01000000
 
@@ -101,6 +111,46 @@ const EXTRAS: Record<Extra, { x: number; y: number; color: string }[]> = {
   ],
 }
 
+// Each personality's flourish, stamped after the eyes and mouth and before the extras.
+type Patch = { rows: string[]; at: { x: number; y: number } }
+const ACCESSORIES: Partial<Record<Personality, Patch[]>> = {
+  // One brow raised.
+  sardonic: [{ at: { x: 9, y: 0 }, rows: ['.DD', 'D..'] }],
+  optimist: [{ at: { x: 14, y: 0 }, rows: ['.Y', 'YY', '.Y'] }],
+  marvin: [
+    { at: { x: 1, y: 1 }, rows: ['G'] },
+    { at: { x: 12, y: 1 }, rows: ['G'] },
+    { at: { x: 1, y: 6 }, rows: ['G'] },
+    { at: { x: 12, y: 6 }, rows: ['G'] },
+  ],
+  noir: [
+    { at: { x: 2, y: 0 }, rows: ['HHHHHHHHHH'] },
+    { at: { x: 0, y: 1 }, rows: ['HHHHHHHHHHHHHHH'] },
+  ],
+  narrator: [
+    { at: { x: 3, y: 0 }, rows: ['KKKKKKKK'] },
+    { at: { x: 1, y: 1 }, rows: ['KKKKKKKKKKKK'] },
+  ],
+  pirate: [
+    { at: { x: 1, y: 0 }, rows: ['RRRRRRRRRRRR'] },
+    { at: { x: 13, y: 1 }, rows: ['RR'] },
+    { at: { x: 2, y: 1 }, rows: ['...D', 'DDD.', 'DDD.', 'DDD.'] },
+  ],
+  bard: [
+    { at: { x: 1, y: 0 }, rows: ['VVVVVVVVVVWW'] },
+    { at: { x: 0, y: 1 }, rows: ['VVVV'] },
+  ],
+  zen: [{ at: { x: 6, y: 1 }, rows: ['gg'] }],
+  philosopher: [
+    { at: { x: 1, y: 6 }, rows: ['EEE......EEE'] },
+    { at: { x: 2, y: 7 }, rows: ['EEEEEEEEEE'] },
+  ],
+  aesop: [
+    { at: { x: 1, y: 0 }, rows: ['LlLlLlLlLlLl'] },
+    { at: { x: 0, y: 1 }, rows: ['L............L'] },
+  ],
+}
+
 const stamp = (grid: string[][], rows: string[], at: { x: number; y: number }) =>
   rows.forEach((row, dy) =>
     [...row].forEach((pixel, dx) => {
@@ -108,12 +158,13 @@ const stamp = (grid: string[][], rows: string[], at: { x: number; y: number }) =
     }),
   )
 
-export function framePixels(frame: Frame): string[][] {
+export function framePixels(frame: Frame, personality: Personality = 'default'): string[][] {
   const grid = HEAD.map(row => [...row])
   const eye = EYES[frame.eyes]
   stamp(grid, eye.rows, LEFT_EYE)
   stamp(grid, eye.isMirrored ? eye.rows.map(row => [...row].reverse().join('')) : eye.rows, RIGHT_EYE)
   stamp(grid, MOUTHS[frame.mouth], MOUTH)
+  for (const { rows, at } of ACCESSORIES[personality] ?? []) stamp(grid, rows, at)
   for (const extra of frame.extras ?? []) {
     for (const { x, y, color } of EXTRAS[extra]) grid[y]![x] = color
   }
@@ -129,8 +180,8 @@ const toBase64 = (bytes: Uint8Array) => {
 }
 
 // Packs the frame as Raster cells: [codePoint, foreground, background] per cell.
-export function frameCells(frame: Frame, body: number): string {
-  const grid = framePixels(frame)
+export function frameCells(frame: Frame, body: number, personality: Personality = 'default'): string {
+  const grid = framePixels(frame, personality)
   const colorOf = (pixel: string) => (pixel === 'O' ? body : PALETTE[pixel])
   const words = new Uint32Array(FACE_COLUMNS * FACE_ROWS * 3)
 

@@ -2,6 +2,30 @@
 
 A Claude Code mod that adds a small pixel face to your session. It reacts to the conversation: it waves when you say hello, blushes when you say thanks, rolls its eyes when you repeat a question, sweats through long turns, flips the table after three failed tool calls, and falls asleep when you leave it alone.
 
+While Claude works, the caption makes little jokes about the task. Haiku writes each one from the task you asked for, what Claude is doing right now (editing `app.ts` for the third time, running the tests), how the turn is going and the last few captions, so it doesn't repeat itself. Long, quiet stretches get something longer, such as an idea from the philosopher or a fable from Aesop. Emotions still take over when they apply: a failed tool gets a glare whatever the caption says.
+
+The captions cost one small model call at most every 3 seconds during a turn, with up to 10 long-wait pieces per turn. Greetings and thanks are skipped. `/face quips` turns the model calls off, and the caption then says what Claude is doing in plain words.
+
+## Personalities
+
+`/face personality <name>` picks the captions' voice and gives the face an accessory to match. Prefixes and aliases work too (`/face personality phil`, `/face personality robot`).
+
+| Name | Voice | Flourish |
+| --- | --- | --- |
+| `default` | Claude as usual | none |
+| `sardonic` | dry and sarcastic | one raised eyebrow |
+| `optimist` | comically optimistic | a sparkle |
+| `marvin` | a depressed robot with a brain far too large for this | steel-grey body and rivets |
+| `noir` | a hard-boiled detective | a fedora |
+| `narrator` | a hushed nature documentary | a pith helmet |
+| `pirate` | a pirate captain | a bandana and eyepatch |
+| `bard` | a melodramatic Shakespearean actor | a feathered beret |
+| `zen` | a zen monk; long waits get koans | a gold dot |
+| `philosopher` | a philosopher; long waits get ideas | a beard |
+| `aesop` | a teller of fables; long waits get fables | a laurel wreath |
+
+Surfaces that draw the text face show a badge beside it instead (`(•‿•) ☠`).
+
 It also keeps a temperament (cheer and energy) across sessions. Kindness cheers it up, long turns tire it out, and rest brings its energy back.
 
 ## Install
@@ -30,6 +54,8 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 | `/face corner` | Show the face in a pane beside the transcript (the default; the pane needs a wide terminal) |
 | `/face band` | Show the face in a row above the prompt |
 | `/face mood` | Show the current cheer and energy |
+| `/face quips` | Turn the model-written captions off or on |
+| `/face personality` | List the personalities, or pick one with `/face personality <name>` |
 
 Closing the corner pane by hand switches the face to the band above the prompt. Surfaces without pixel drawing, and bands too short for it, get a text face like `(•‿•)`.
 
@@ -41,7 +67,7 @@ claude plugin uninstall mood-face
 
 ## Development
 
-The hooks module is `hooks/register.tsx`; the pixel art is in `hooks/pixels.ts`.
+The hooks module is `hooks/register.tsx`; the pixel art is in `hooks/pixels.ts`; the caption prompt is in `hooks/captions.ts`, the personalities in `hooks/personalities.ts`, and the plain description of each tool call in `hooks/zingers.ts`.
 
 ```sh
 claude plugin validate .
